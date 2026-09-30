@@ -1,0 +1,27 @@
+# Producción en una EC2: Caddy (HTTPS automático) → web (nginx) → api → db.
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build
+# Requiere DOMAIN en .env y el registro DNS apuntando a la IP de la instancia.
+
+services:
+  web:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Defina DOMAIN en .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:
