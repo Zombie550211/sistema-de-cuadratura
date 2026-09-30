@@ -63,6 +63,7 @@ Content-Type: application/json
 | `agents[].badge_number` | Recomendado | ID del agente en el **reloj de marcación**. Así el sistema enlaza sus marcas. |
 | `agents[].first_name`, `last_name` | Solo si el agente es nuevo | Si el agente no existe, se crea con estos datos. Si ya existe y llegan distintos, se actualizan: el nombre del CRM es el que vale. |
 | `agents[].campaign` | No | Campaña o departamento. Se crea si no existe. |
+| `agents[].hire_date` | No | Fecha de ingreso (`AAAA-MM-DD`). Si llega, se guarda o actualiza en el empleado. |
 | `agents[].supervisor` | No | Informativo. |
 | `shifts[].date` | Sí | Día en que **inicia** el turno (`AAAA-MM-DD`), dentro del periodo. |
 | `shifts[].start`, `end` | Sí, salvo día libre | Hora local de El Salvador (`HH:MM`). Si `end` es menor que `start`, el turno termina al día siguiente. |

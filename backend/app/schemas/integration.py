@@ -39,6 +39,7 @@ class CrmAgent(BaseModel):
     last_name: str | None = Field(default=None, max_length=100)
     campaign: str | None = Field(default=None, max_length=120)
     supervisor: str | None = Field(default=None, max_length=160)
+    hire_date: date | None = None  # fecha de ingreso (la lleva el CRM)
     shifts: list[CrmShift] = Field(default_factory=list, max_length=62)
 
     @field_validator("crm_agent_id")

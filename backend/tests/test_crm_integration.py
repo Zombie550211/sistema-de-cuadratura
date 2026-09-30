@@ -131,6 +131,18 @@ def test_crm_name_updates_existing_employee(crm):
     assert (emp["first_name"], emp["last_name"]) == ("EDWARD MANUEL", "RAMIREZ CALDERON")
 
 
+def test_crm_hire_date(crm):
+    client, headers = crm
+    # Nuevo con fecha de ingreso, luego se corrige; sin fecha en el envío no se toca.
+    body = _send(client, headers, [_agent(hire_date="2026-09-16")]).json()
+    emp_id = body["agents"][0]["employee_id"]
+    assert client.get(f"/api/employees/{emp_id}").json()["hire_date"] == "2026-09-16"
+    _send(client, headers, [_agent(hire_date="2025-01-06")])
+    assert client.get(f"/api/employees/{emp_id}").json()["hire_date"] == "2025-01-06"
+    _send(client, headers, [_agent()])
+    assert client.get(f"/api/employees/{emp_id}").json()["hire_date"] == "2025-01-06"
+
+
 def test_agent_errors_do_not_block_others(crm):
     client, headers = crm
     client.post("/api/employees", json={"code": "E-1", "first_name": "Otro", "last_name": "Agente", "badge_number": "50", "crm_agent_id": "Z-9"})
