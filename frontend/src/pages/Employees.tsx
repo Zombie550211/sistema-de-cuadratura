@@ -2,10 +2,11 @@ import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { IconLink, IconPlus } from "../components/Icons";
+import { RosterImport } from "../components/RosterImport";
 import { SectionBanner, TeamHeader, useCollapsedTeams } from "../components/TeamGroups";
 import { api, groupByTeam, type Department, type Employee, type EmployeeInput, type Page, type UnmappedBadge } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { fmtDateTime } from "../lib/format";
+import { fmtDate, fmtDateTime, seniority } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 import { EmployeeForm } from "./EmployeeForm";
 
@@ -20,6 +21,7 @@ export function Employees() {
   const [debounced, setDebounced] = useState("");
   const [status, setStatus] = useState("activo");
   const [editing, setEditing] = useState<Editing>(null);
+  const [importing, setImporting] = useState(false);
   const showUnmapped = params.get("vincular") === "1";
   const teams = useCollapsedTeams("empleados.teams-plegados");
 
@@ -49,6 +51,11 @@ export function Employees() {
           {!!unmapped.data?.length && (
             <button className="btn ghost" onClick={() => setParams(showUnmapped ? {} : { vincular: "1" })}>
               <IconLink /> {unmapped.data.length} IDs sin vincular
+            </button>
+          )}
+          {canEdit && (
+            <button className="btn ghost" onClick={() => setImporting(true)}>
+              Importar nómina
             </button>
           )}
           {canEdit && (
@@ -120,6 +127,7 @@ export function Employees() {
                 <th>ID reloj</th>
                 <th>ID CRM</th>
                 <th>Cargo</th>
+                <th>Ingreso</th>
                 <th>Estado</th>
               </tr>
             </thead>
@@ -128,13 +136,13 @@ export function Employees() {
                 <Fragment key={g.key}>
                 {g.newSection && g.team && (
                   <tr className="section-row">
-                    <td colSpan={5}>
+                    <td colSpan={6}>
                       <SectionBanner group={g} />
                     </td>
                   </tr>
                 )}
                 <tr className="team-row">
-                  <td colSpan={5}>
+                  <td colSpan={6}>
                     <TeamHeader group={g} open={teams.isOpen(g.key)} onToggle={() => teams.toggle(g.key)} />
                   </td>
                 </tr>
@@ -151,6 +159,16 @@ export function Employees() {
                   <td>{e.crm_agent_id ? <span className="badge accent">{e.crm_agent_id}</span> : <span className="muted">—</span>}</td>
                   <td>{e.position ?? <span className="muted">—</span>}</td>
                   <td>
+                    {e.hire_date ? (
+                      <>
+                        <div className="mono">{fmtDate(e.hire_date)}</div>
+                        <div className="caption">{seniority(e.hire_date)}</div>
+                      </>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td>
                     <span className={`badge${e.status === "activo" ? " accent" : ""}`}>{e.status}</span>
                   </td>
                 </tr>
@@ -163,6 +181,15 @@ export function Employees() {
         </div>
       </div>
 
+      {importing && (
+        <RosterImport
+          onClose={() => setImporting(false)}
+          onDone={() => {
+            setImporting(false);
+            list.reload();
+          }}
+        />
+      )}
       {editing && (
         <EmployeeForm
           employee={editing.employee}

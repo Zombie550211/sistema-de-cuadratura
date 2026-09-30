@@ -26,13 +26,17 @@ export interface TeamGroup<T> {
 }
 
 /** Agrupa empleados consecutivos por team. La API ya los devuelve en el orden del CRM. */
-export function groupByTeam<T extends { department: Department | null; crm_order: number | null }>(items: T[]) {
+const isSupervisorPosition = (position: string | null) => !!position && /supervisor/i.test(position);
+
+export function groupByTeam<T extends { department: Department | null; crm_order: number | null; position: string | null }>(items: T[]) {
   const groups: TeamGroup<T>[] = [];
   for (const item of items) {
     const key = item.department ? String(item.department.id) : "none";
     const last = groups[groups.length - 1];
     if (last?.key === key) {
       last.items.push(item);
+      // El cargo de la nómina manda sobre la posición del envío del CRM.
+      if (last.team && isSupervisorPosition(item.position) && !isSupervisorPosition(last.supervisor?.position ?? null)) last.supervisor = item;
       continue;
     }
     const section = item.department?.section ?? "none";
@@ -40,7 +44,7 @@ export function groupByTeam<T extends { department: Department | null; crm_order
     groups.push({
       key,
       team: item.department,
-      supervisor: item.department && item.crm_order !== null ? item : null,
+      supervisor: item.department && (item.crm_order !== null || isSupervisorPosition(item.position)) ? item : null,
       items: [item],
       newSection: section !== lastSection,
     });

@@ -1,8 +1,9 @@
 """Aplica los horarios que envía el CRM.
 
 Reglas:
-- El agente se identifica por crm_agent_id. Si no existe se busca por ID de reloj; si tampoco,
-  se crea el empleado (requiere nombre y apellido).
+- El agente se identifica por crm_agent_id. Si no existe se busca por ID de reloj; después por
+  nombre entre los empleados de la nómina sin ID de CRM (el CRM usa nombres cortos, p.ej.
+  "Bryan Pleitez" para "Bryan Stanley Segovia Pleitez"); si tampoco, se crea el empleado.
 - El ID de reloj que manda el CRM es el que vale: se actualiza en el empleado y sus marcas se re-vinculan.
 - El nombre también: si llegan first_name y last_name y son distintos, se actualizan en el empleado
   (el CRM guarda el nombre legal completo de cada agente). Igual la fecha de ingreso (hire_date).
@@ -24,6 +25,7 @@ from app.models import ApiClient, Department, Employee, IntegrationSync, ShiftAs
 from app.schemas.integration import AgentResult, CrmAgent, CrmSchedulePayload, SyncResult
 from app.services import audit
 from app.services.attendance_import import relink_badge
+from app.services.employee_roster import name_key
 
 
 class AgentError(Exception):
@@ -62,6 +64,23 @@ def _resolve_employee(db: Session, agent: CrmAgent) -> tuple[Employee, bool]:
                 )
             employee.crm_agent_id = agent.crm_agent_id
             return employee, False
+
+    wanted = name_key(f"{agent.first_name or ''} {agent.last_name or ''}")
+    if len(wanted) >= 2:
+        # Todas las palabras del nombre del CRM deben estar en el nombre completo de la nómina.
+        matches = [
+            e
+            for e in db.scalars(select(Employee).where(Employee.crm_agent_id.is_(None)))
+            if wanted <= name_key(e.full_name)
+        ]
+        if len(matches) == 1:
+            matches[0].crm_agent_id = agent.crm_agent_id
+            return matches[0], False
+        if len(matches) > 1:
+            raise AgentError(
+                f"El nombre coincide con varios empleados ({', '.join(f'{e.code} {e.full_name}' for e in matches)}): "
+                "ponga el ID de CRM en la ficha del empleado correcto"
+            )
 
     if not (agent.first_name and agent.last_name):
         raise AgentError("Agente nuevo: se requieren first_name y last_name para crearlo")

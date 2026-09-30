@@ -122,6 +122,36 @@ class EmployeeBrief(ORM):
     badge_number: str | None
 
 
+class RosterImportIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500_000)
+    dry_run: bool = True
+
+
+class RosterRowOut(BaseModel):
+    line: int
+    code: str
+    first_name: str
+    last_name: str
+    position: str
+    hire_date: date
+    status: str  # nuevo | actualizar | sin_cambios
+
+
+class RosterErrorOut(BaseModel):
+    line: int
+    text: str
+    message: str
+
+
+class RosterImportOut(BaseModel):
+    rows: list[RosterRowOut]
+    errors: list[RosterErrorOut]
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    applied: bool = False
+
+
 # ---------- Horarios ----------
 
 

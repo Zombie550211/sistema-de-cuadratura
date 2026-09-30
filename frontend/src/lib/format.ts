@@ -50,6 +50,24 @@ export function weekStart(ymd: string): string {
   return addDays(ymd, dow === 0 ? -6 : 1 - dow);
 }
 
+/** AAAA-MM-DD → dd/mm/aaaa, como se escriben las fechas en RRHH. */
+export const fmtDate = (ymd: string) => ymd.slice(0, 10).split("-").reverse().join("/");
+
+/** Antigüedad desde una fecha AAAA-MM-DD hasta hoy: "5 años", "3 meses", "12 días". */
+export function seniority(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const [ty, tm, td] = today().split("-").map(Number);
+  let months = (ty - y) * 12 + (tm - m) - (td < d ? 1 : 0);
+  if (months < 0) return "aún no ingresa";
+  if (months >= 12) {
+    const years = Math.floor(months / 12);
+    return `${years} año${years === 1 ? "" : "s"}`;
+  }
+  if (months >= 1) return `${months} mes${months === 1 ? "" : "es"}`;
+  const days = Math.round((Date.parse(`${today()}T00:00:00Z`) - Date.parse(`${ymd}T00:00:00Z`)) / 86_400_000);
+  return `${days} día${days === 1 ? "" : "s"}`;
+}
+
 export const hhmm = (t: string) => t.slice(0, 5);
 
 export const ROLE_LABEL: Record<string, string> = {

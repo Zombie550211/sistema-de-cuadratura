@@ -23,10 +23,14 @@ from app.schemas import (
     EmployeeScheduleOut,
     EmployeeUpdate,
     Page,
+    RosterImportIn,
+    RosterImportOut,
+    RosterRowOut,
 )
 from app.services import audit
 from app.services.attendance_day import employee_days
 from app.services.attendance_import import relink_badge
+from app.services.employee_roster import apply_roster, parse_roster
 
 router = APIRouter(tags=["empleados"])
 
@@ -130,6 +134,37 @@ def employee_schedule(employee_id: int, date_from: date, date_to: date, db: DB, 
         last_crm_sync_at=last_sync,
         days=employee_days(db, employee_id, date_from, date_to),
     )
+
+
+@router.post("/employees/import", response_model=RosterImportOut)
+def import_roster(data: RosterImportIn, db: DB, user: HR):
+    """Nómina pegada desde Excel. Con dry_run devuelve la vista previa; si hay errores no se guarda nada."""
+    rows, errors = parse_roster(data.text)
+    existing = {
+        e.code: e for e in db.scalars(select(Employee).where(Employee.code.in_([r.code for r in rows])))
+    }
+
+    def status_of(r):
+        e = existing.get(r.code)
+        if e is None:
+            return "nuevo"
+        same = (e.first_name, e.last_name, e.position, e.hire_date) == (r.first_name, r.last_name, r.position, r.hire_date)
+        return "sin_cambios" if same else "actualizar"
+
+    out = RosterImportOut(
+        rows=[RosterRowOut(**vars(r), status=status_of(r)) for r in rows],
+        errors=[vars(e) for e in errors],
+    )
+    out.created = sum(r.status == "nuevo" for r in out.rows)
+    out.updated = sum(r.status == "actualizar" for r in out.rows)
+    out.unchanged = sum(r.status == "sin_cambios" for r in out.rows)
+    if data.dry_run or errors or not rows:
+        return out
+    result = apply_roster(db, rows)
+    audit.record(db, user, "importar", "employee", None, result)
+    db.commit()
+    out.applied = True
+    return out
 
 
 @router.post("/employees", response_model=EmployeeOut, status_code=status.HTTP_201_CREATED)
