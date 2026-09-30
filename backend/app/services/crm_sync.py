@@ -7,6 +7,8 @@ Reglas:
 - Dentro del periodo enviado, los horarios con origen 'crm' del agente se reemplazan por los del envío
   (una fecha sin turno o con rest_day=true queda libre).
 - Un horario cargado a mano por RRHH ('manual') nunca se pisa: se reporta como conflicto.
+- El CRM manda los agentes ordenados por equipo (supervisor primero): esa posición se guarda en
+  crm_order para listarlos igual aquí.
 - Cada agente se aplica en su propio savepoint: un error en uno no bloquea a los demás.
 """
 
@@ -82,6 +84,7 @@ def _apply_agent(
     sync: IntegrationSync,
     counters: _Counters,
     departments: dict[str, Department],
+    position: int,
 ) -> AgentResult:
     tz = get_settings().tz
     employee, created = _resolve_employee(db, agent)
@@ -99,6 +102,7 @@ def _apply_agent(
 
     if agent.campaign:
         employee.department_id = _department(db, departments, agent.campaign).id
+    employee.crm_order = position
 
     existing = {
         a.work_date: a
@@ -214,11 +218,11 @@ def apply_schedules(
     counters = _Counters()
     departments: dict[str, Department] = {}
     results: list[AgentResult] = []
-    for agent in payload.agents:
+    for position, agent in enumerate(payload.agents):
         savepoint = db.begin_nested()
         snapshot = (counters.created, counters.updated, counters.removed, counters.employees_created)
         try:
-            results.append(_apply_agent(db, agent, payload, sync, counters, departments))
+            results.append(_apply_agent(db, agent, payload, sync, counters, departments, position))
             savepoint.commit()
         except AgentError as exc:
             savepoint.rollback()

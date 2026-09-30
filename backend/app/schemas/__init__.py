@@ -62,6 +62,7 @@ class DepartmentIn(BaseModel):
 class DepartmentOut(ORM):
     id: int
     name: str
+    section: str  # residencial | lineas
 
 
 class EmployeeBase(BaseModel):

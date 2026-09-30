@@ -12,7 +12,22 @@ export interface User {
 export interface Department {
   id: number;
   name: string;
+  section: "residencial" | "lineas";
 }
+
+/** Agrupa empleados consecutivos por equipo. La API ya los devuelve en el orden del CRM. */
+export function groupByTeam<T extends { department: Department | null }>(items: T[]) {
+  const groups: { key: string; team: Department | null; items: T[] }[] = [];
+  for (const item of items) {
+    const key = item.department ? String(item.department.id) : "none";
+    const last = groups[groups.length - 1];
+    if (last?.key === key) last.items.push(item);
+    else groups.push({ key, team: item.department, items: [item] });
+  }
+  return groups;
+}
+
+export const SECTION_LABEL = { residencial: "Residencial", lineas: "Líneas" } as const;
 
 export interface EmployeeInput {
   code: string;

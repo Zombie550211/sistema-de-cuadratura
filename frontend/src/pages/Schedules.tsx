@@ -1,9 +1,9 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { Fragment, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 
 import { IconChevronLeft, IconChevronRight, IconPlus, IconX } from "../components/Icons";
 import { Modal } from "../components/Modal";
-import { api, type Employee, type Page, type ShiftAssignment, type ShiftTemplate } from "../lib/api";
+import { api, groupByTeam, SECTION_LABEL, type Employee, type Page, type ShiftAssignment, type ShiftTemplate } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { addDays, fmtShortDay, fmtTime, hhmm, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
@@ -111,8 +111,17 @@ export function Schedules() {
                 {fmtShortDay(d)}
               </div>
             ))}
-            {visible.map((e) => (
-              <Row key={e.id} employee={e} days={days} byKey={byKey} templateById={templateById} canEdit={canEdit} onRemove={remove} />
+            {groupByTeam(visible).map((g) => (
+              <Fragment key={g.key}>
+                <div className="team-head">
+                  <b>{g.team?.name ?? "Sin equipo"}</b>
+                  {g.team && <span className="caption">{SECTION_LABEL[g.team.section]}</span>}
+                  <span className="caption">· {g.items.length}</span>
+                </div>
+                {g.items.map((e) => (
+                  <Row key={e.id} employee={e} days={days} byKey={byKey} templateById={templateById} canEdit={canEdit} onRemove={remove} />
+                ))}
+              </Fragment>
             ))}
           </div>
           {employees.data?.items.length === 0 && <div className="empty">Registre empleados para poder asignarles horarios.</div>}

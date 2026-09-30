@@ -113,7 +113,7 @@ export function EmployeeForm({ employee, initial, departments, readOnly, onClose
             <input {...text("position")} placeholder="Agente, supervisor…" />
           </label>
           <label className="field">
-            <span>Departamento / campaña</span>
+            <span>Equipo</span>
             <div className="row" style={{ flexWrap: "nowrap", gap: 8 }}>
               <select
                 className="input"

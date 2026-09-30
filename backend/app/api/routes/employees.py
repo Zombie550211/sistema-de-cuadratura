@@ -46,7 +46,7 @@ def _integrity_message(exc: IntegrityError) -> str:
 
 @router.get("/departments", response_model=list[DepartmentOut])
 def list_departments(db: DB, _: Staff):
-    return db.scalars(select(Department).order_by(Department.name)).all()
+    return db.scalars(select(Department).order_by(Department.section == "lineas", Department.sort_key)).all()
 
 
 @router.post("/departments", response_model=DepartmentOut, status_code=status.HTTP_201_CREATED)
@@ -73,7 +73,7 @@ def list_employees(
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
-    stmt = select(Employee)
+    stmt = select(Employee).outerjoin(Department, Employee.department_id == Department.id)
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(
@@ -92,7 +92,7 @@ def list_employees(
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     items = db.scalars(
-        stmt.order_by(Employee.last_name, Employee.first_name).limit(limit).offset(offset)
+        stmt.order_by(*Employee.team_order()).limit(limit).offset(offset)
     ).all()
     return Page(items=items, total=total)
 

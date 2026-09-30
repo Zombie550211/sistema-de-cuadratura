@@ -212,3 +212,31 @@ def test_roster_complete_releases_absent_agents_only(crm):
     # A-1 intacto
     emp1 = body["agents"][0]["employee_id"]
     assert len(client.get("/api/schedules/assignments", params={**WEEK, "employee_id": emp1}).json()) == 2
+
+
+def test_employees_listed_by_team_like_crm(crm):
+    client, headers = crm
+    client.post("/api/employees", json={"code": "E-1", "first_name": "Ana", "last_name": "Abarca"})
+
+    def a(crm_id, first, last, team):
+        return _agent(crm_id, None, first_name=first, last_name=last, campaign=team, shifts=[])
+
+    # Orden del CRM: Residencial y luego Líneas; equipo por equipo; supervisor primero.
+    sent = [
+        a("1", "Miguel", "Núñez", "TEAM MIGUEL NUÑEZ"),
+        a("2", "Zoila", "Zelaya", "TEAM MIGUEL NUÑEZ"),
+        a("3", "Bruno", "Arias", "TEAM MIGUEL NUÑEZ"),
+        a("4", "Rosa", "Vides", "TEAM ROSA VIDES"),
+        a("5", "Luis", "Alas", "TEAM ROSA VIDES"),
+        a("6", "Carla", "Mejía", "TEAM LINEAS CARLA"),
+        a("7", "Ana", "Bonilla", "TEAM LINEAS CARLA"),
+    ]
+    assert _send(client, headers, sent).status_code == 200
+
+    items = client.get("/api/employees", params={"limit": 50}).json()["items"]
+    crm_ids = [e["crm_agent_id"] for e in items]
+    assert crm_ids == ["1", "2", "3", "4", "5", "6", "7", None]  # sin equipo, al final
+    assert items[5]["department"]["section"] == "lineas"
+
+    teams = [d["name"] for d in client.get("/api/departments").json()]
+    assert teams == ["TEAM MIGUEL NUÑEZ", "TEAM ROSA VIDES", "TEAM LINEAS CARLA"]

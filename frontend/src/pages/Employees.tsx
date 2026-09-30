@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { IconLink, IconPlus } from "../components/Icons";
-import { api, type Department, type Employee, type EmployeeInput, type Page, type UnmappedBadge } from "../lib/api";
+import { api, groupByTeam, SECTION_LABEL, type Department, type Employee, type EmployeeInput, type Page, type UnmappedBadge } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { fmtDateTime } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
@@ -118,12 +118,21 @@ export function Employees() {
                 <th>ID reloj</th>
                 <th>ID CRM</th>
                 <th>Cargo</th>
-                <th>Departamento</th>
+                <th>Equipo</th>
                 <th>Estado</th>
               </tr>
             </thead>
             <tbody>
-              {list.data?.items.map((e) => (
+              {groupByTeam(list.data?.items ?? []).map((g) => (
+                <Fragment key={g.key}>
+                <tr className="team-row">
+                  <td colSpan={6}>
+                    <b>{g.team?.name ?? "Sin equipo"}</b>
+                    {g.team && <span className="caption"> {SECTION_LABEL[g.team.section]}</span>}
+                    <span className="caption"> · {g.items.length}</span>
+                  </td>
+                </tr>
+                {g.items.map((e) => (
                 <tr key={e.id} className="clickable" onClick={() => navigate(`/empleados/${e.id}`)}>
                   <td>
                     <div>{e.full_name}</div>
@@ -137,6 +146,8 @@ export function Employees() {
                     <span className={`badge${e.status === "activo" ? " accent" : ""}`}>{e.status}</span>
                   </td>
                 </tr>
+                ))}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -152,7 +163,7 @@ export function Employees() {
           readOnly={!canEdit}
           onClose={() => setEditing(null)}
           onSaved={saved}
-          onDepartmentCreated={(d) => departments.setData([...(departments.data ?? []), d].sort((a, b) => a.name.localeCompare(b.name)))}
+          onDepartmentCreated={(d) => departments.setData([...(departments.data ?? []), d])}
         />
       )}
     </div>
