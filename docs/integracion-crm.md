@@ -61,7 +61,7 @@ Content-Type: application/json
 | `date_from`, `date_to` | Sí | Periodo que cubre el envío (máximo 31 días). Normalmente lunes a domingo de la semana siguiente. |
 | `agents[].crm_agent_id` | Sí | ID del agente en el CRM. Es la llave principal entre ambos sistemas. |
 | `agents[].badge_number` | Recomendado | ID del agente en el **reloj de marcación**. Así el sistema enlaza sus marcas. |
-| `agents[].first_name`, `last_name` | Solo si el agente es nuevo | Si el agente no existe, se crea con estos datos. |
+| `agents[].first_name`, `last_name` | Solo si el agente es nuevo | Si el agente no existe, se crea con estos datos. Si ya existe y llegan distintos, se actualizan: el nombre del CRM es el que vale. |
 | `agents[].campaign` | No | Campaña o departamento. Se crea si no existe. |
 | `agents[].supervisor` | No | Informativo. |
 | `shifts[].date` | Sí | Día en que **inicia** el turno (`AAAA-MM-DD`), dentro del periodo. |

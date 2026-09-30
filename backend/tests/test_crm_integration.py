@@ -115,6 +115,22 @@ def test_existing_employee_matched_by_badge(crm):
     assert client.get(f"/api/employees/{existing['id']}").json()["crm_agent_id"] == "A-100"
 
 
+def test_crm_name_updates_existing_employee(crm):
+    client, headers = crm
+    first = _send(client, headers, [_agent(first_name="EDWARD", last_name="RAMIREZ")]).json()
+    emp_id = first["agents"][0]["employee_id"]
+    # El CRM ahora manda el nombre legal completo: se actualiza, sin crear otro empleado.
+    body = _send(client, headers, [_agent(first_name="EDWARD MANUEL", last_name="RAMIREZ CALDERON")]).json()
+    assert body["employees_created"] == 0
+    assert body["agents"][0]["employee_id"] == emp_id
+    emp = client.get(f"/api/employees/{emp_id}").json()
+    assert (emp["first_name"], emp["last_name"]) == ("EDWARD MANUEL", "RAMIREZ CALDERON")
+    # Sin nombre en el envío no se toca.
+    _send(client, headers, [_agent(first_name=None, last_name=None)])
+    emp = client.get(f"/api/employees/{emp_id}").json()
+    assert (emp["first_name"], emp["last_name"]) == ("EDWARD MANUEL", "RAMIREZ CALDERON")
+
+
 def test_agent_errors_do_not_block_others(crm):
     client, headers = crm
     client.post("/api/employees", json={"code": "E-1", "first_name": "Otro", "last_name": "Agente", "badge_number": "50", "crm_agent_id": "Z-9"})

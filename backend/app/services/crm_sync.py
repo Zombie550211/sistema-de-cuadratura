@@ -4,6 +4,8 @@ Reglas:
 - El agente se identifica por crm_agent_id. Si no existe se busca por ID de reloj; si tampoco,
   se crea el empleado (requiere nombre y apellido).
 - El ID de reloj que manda el CRM es el que vale: se actualiza en el empleado y sus marcas se re-vinculan.
+- El nombre también: si llegan first_name y last_name y son distintos, se actualizan en el empleado
+  (el CRM guarda el nombre legal completo de cada agente).
 - Dentro del periodo enviado, los horarios con origen 'crm' del agente se reemplazan por los del envío
   (una fecha sin turno o con rest_day=true queda libre).
 - Un horario cargado a mano por RRHH ('manual') nunca se pisa: se reporta como conflicto.
@@ -88,6 +90,11 @@ def _apply_agent(
 ) -> AgentResult:
     tz = get_settings().tz
     employee, created = _resolve_employee(db, agent)
+
+    if not created and agent.first_name and agent.last_name:
+        nombre, apellido = agent.first_name.strip(), agent.last_name.strip()
+        if (employee.first_name, employee.last_name) != (nombre, apellido):
+            employee.first_name, employee.last_name = nombre, apellido
 
     if agent.badge_number and agent.badge_number != employee.badge_number:
         owner = db.scalar(select(Employee).where(Employee.badge_number == agent.badge_number))
