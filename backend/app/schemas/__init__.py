@@ -111,6 +111,7 @@ class EmployeeUpdate(EmployeeBase):
 class EmployeeOut(ORM, EmployeeBase):
     id: int
     full_name: str
+    crm_order: int | None = None
     department: DepartmentOut | None
 
 

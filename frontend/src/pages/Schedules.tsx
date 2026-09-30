@@ -1,28 +1,86 @@
-import { Fragment, useMemo, useState, type FormEvent } from "react";
+import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-import { IconChevronLeft, IconChevronRight, IconPlus, IconX } from "../components/Icons";
+import { IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconSim } from "../components/Icons";
 import { Modal } from "../components/Modal";
-import { api, groupByTeam, SECTION_LABEL, type Employee, type Page, type ShiftAssignment, type ShiftTemplate } from "../lib/api";
+import { useCollapsedTeams } from "../components/TeamGroups";
+import {
+  api,
+  groupByTeam,
+  SECTION_LABEL,
+  type Employee,
+  type Page,
+  type Punch,
+  type ShiftAssignment,
+  type ShiftTemplate,
+  type Sync,
+} from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { addDays, fmtShortDay, fmtTime, hhmm, today, weekStart } from "../lib/format";
+import { addDays, fmtDateTime, fmtLongDate, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
+const DOW = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+/** Por debajo de este número de agentes en turno, la hora se marca como descubierta. */
+const MIN_COVERAGE = 4;
+/** Horas semanales a partir de las que se avisa (jornada ordinaria diurna en El Salvador). */
+const WEEK_LIMIT_HOURS = 44;
+
+type Pop = { employee: Employee; day: string; dayIndex: number; current?: ShiftAssignment; top: number; left: number };
+
+/** Horas de trabajo efectivo de un turno (sin el descanso). */
+const workHours = (a: ShiftAssignment) => (new Date(a.end_at).getTime() - new Date(a.start_at).getTime()) / 3_600_000 - a.break_minutes / 60;
+const fmtHours = (h: number) => `${Math.round(h * 10) / 10} h`.replace(".", ",");
+const hourLabel = (h: number) => {
+  const x = ((h % 24) + 24) % 24;
+  return `${x === 0 ? 12 : x > 12 ? x - 12 : x}${x < 12 ? "a" : "p"}`;
+};
+
+/** Texto negro o blanco según qué se lea mejor sobre el color del turno. */
+function readableOn(hex: string) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return "var(--on-accent)";
+  const n = parseInt(m[1], 16);
+  const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum > 0.6 ? "var(--text)" : "var(--on-accent)";
+}
 
 export function Schedules() {
   const { can } = useAuth();
   const canEdit = can("admin", "rrhh");
   const [start, setStart] = useState(() => weekStart(today()));
-  const [filter, setFilter] = useState("");
+  const [dayIndex, setDayIndex] = useState(() => (new Date(`${today()}T00:00:00Z`).getUTCDay() + 6) % 7);
+  const [query, setQuery] = useState("");
+  const [team, setTeam] = useState("all");
+  const [pop, setPop] = useState<Pop | null>(null);
   const [assigning, setAssigning] = useState(false);
-  const [templateModal, setTemplateModal] = useState<ShiftTemplate | "new" | null>(null);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const teams = useCollapsedTeams("horarios.teams-plegados");
+
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(start, i)), [start]);
-  const end = days[6];
+  const day = days[dayIndex];
+  const isToday = day === today();
+  const isFuture = day > today();
 
   const employees = useAsync(() => api.get<Page<Employee>>("/employees", { status: "activo", limit: 500 }), []);
   const templates = useAsync(() => api.get<ShiftTemplate[]>("/schedules/templates", { include_inactive: true }), []);
-  const assignments = useAsync(() => api.get<ShiftAssignment[]>("/schedules/assignments", { date_from: start, date_to: end }), [start, end]);
+  const assignments = useAsync(() => api.get<ShiftAssignment[]>("/schedules/assignments", { date_from: days[0], date_to: days[6] }), [days]);
+  const punches = useAsync(
+    () =>
+      isFuture
+        ? Promise.resolve({ items: [], total: 0 } as Page<Punch>)
+        : api.get<Page<Punch>>("/attendance/punches", { date_from: day, date_to: day, include_double_taps: false, limit: 2000 }),
+    [day, isFuture],
+  );
+  const lastSync = useAsync(() => (canEdit ? api.get<Page<Sync>>("/integrations/syncs", { limit: 1 }) : Promise.resolve(null)), [canEdit]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPop(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const byKey = useMemo(() => {
     const map = new Map<string, ShiftAssignment>();
@@ -30,110 +88,347 @@ export function Schedules() {
     return map;
   }, [assignments.data]);
   const templateById = useMemo(() => new Map(templates.data?.map((t) => [t.id, t])), [templates.data]);
+  /** Turno base del horario: el asignado, o el que tiene las mismas horas (los del CRM no traen turno base). */
+  const templateOf = (a: ShiftAssignment) =>
+    (a.template_id ? templateById.get(a.template_id) : undefined) ??
+    templates.data?.find((t) => t.is_active && hhmm(t.start_time) === fmtTime(a.start_at) && hhmm(t.end_time) === fmtTime(a.end_at));
+  const colorOf = (a: ShiftAssignment) => templateOf(a)?.color ?? "#0891b2";
 
-  const visible = (employees.data?.items ?? []).filter((e) => {
-    const q = filter.trim().toLowerCase();
-    return !q || e.full_name.toLowerCase().includes(q) || e.code.toLowerCase().includes(q) || e.badge_number === q;
-  });
+  /** Primera marca válida del día por empleado (la API las devuelve de la más reciente a la más antigua). */
+  const firstPunch = useMemo(() => {
+    const map = new Map<number, Punch>();
+    for (const p of punches.data?.items ?? []) if (p.employee) map.set(p.employee.id, p);
+    return map;
+  }, [punches.data]);
 
-  async function remove(a: ShiftAssignment) {
-    if (!confirm("¿Quitar este horario?")) return;
-    await api.delete(`/schedules/assignments/${a.id}`);
-    assignments.reload();
+  const allGroups = useMemo(() => groupByTeam(employees.data?.items ?? []), [employees.data]);
+  const q = query.trim().toLowerCase();
+  const groups = allGroups
+    .filter((g) => team === "all" || g.key === team)
+    .map((g) => ({ ...g, items: g.items.filter((e) => !q || e.full_name.toLowerCase().includes(q) || e.badge_number === q) }))
+    .filter((g) => g.items.length);
+  const visible = groups.flatMap((g) => g.items);
+
+  // Ventana de horas del día: 8a–9p como mínimo, ampliada si hay turnos antes o nocturnos.
+  const dayShifts = visible.map((e) => byKey.get(`${e.id}|${day}`)).filter((a): a is ShiftAssignment => !!a);
+  const h0 = Math.min(8, ...dayShifts.map((a) => Math.floor(hoursFrom(day, a.start_at))));
+  const h1 = Math.min(32, Math.max(21, ...dayShifts.map((a) => Math.ceil(hoursFrom(day, a.end_at)))));
+  const span = h1 - h0;
+  const hours = Array.from({ length: span }, (_, k) => h0 + k);
+  const coverage = hours.map((h) => dayShifts.filter((a) => hoursFrom(day, a.start_at) <= h && hoursFrom(day, a.end_at) > h).length);
+  const maxCoverage = Math.max(1, ...coverage);
+  const thin = hours.filter((_, k) => coverage[k] < MIN_COVERAGE);
+
+  const weekHours = (e: Employee) => days.reduce((sum, d) => {
+    const a = byKey.get(`${e.id}|${d}`);
+    return sum + (a ? workHours(a) : 0);
+  }, 0);
+
+  function mark(e: Employee, a: ShiftAssignment | undefined): { text: string; warn?: boolean } {
+    if (isFuture) return { text: a ? `${fmtTime(a.start_at)}–${fmtTime(a.end_at)} · ${fmtHours(workHours(a))}` : "—" };
+    const p = firstPunch.get(e.id);
+    if (!a) return p ? { text: `Marcó ${fmtTime(p.punched_at)} · sin turno` } : { text: isToday ? "Sin turno hoy" : "Sin turno" };
+    const limit = new Date(a.start_at).getTime() + a.tolerance_minutes * 60_000;
+    if (p) {
+      const late = new Date(p.punched_at).getTime() > limit;
+      return { text: `Marcó ${fmtTime(p.punched_at)}${late ? " · tarde" : ""}`, warn: late };
+    }
+    if (!e.badge_number) return { text: "Sin ID de reloj", warn: true };
+    return Date.now() < limit ? { text: "Aún no marca" } : { text: "Sin marcación", warn: true };
   }
 
-  return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <h1>Horarios</h1>
-          <p>
-            Los supervisores cargan los horarios en el CRM y llegan aquí automáticamente cada semana. RRHH puede ajustar un día a mano: esos cambios
-            no se sobrescriben.
-          </p>
-        </div>
-        {canEdit && (
-          <button className="btn" onClick={() => setAssigning(true)} disabled={!employees.data?.items.length}>
-            <IconPlus /> Asignar horario
-          </button>
-        )}
-      </div>
+  function openPop(ev: MouseEvent, e: Employee) {
+    if (!canEdit) return;
+    const top = ev.clientY + 360 > window.innerHeight ? Math.max(8, ev.clientY - 360) : ev.clientY + 12;
+    setError(null);
+    setPop({ employee: e, day, dayIndex, current: byKey.get(`${e.id}|${day}`), top, left: Math.min(ev.clientX, window.innerWidth - 320) });
+  }
 
-      <div className="card">
-        <div className="card-head">
-          <h3>Turnos base</h3>
+  async function applyTemplate(t: ShiftTemplate, weekdays: number[]) {
+    if (!pop) return;
+    setBusy(true);
+    try {
+      await api.post("/schedules/assignments/bulk", {
+        employee_ids: [pop.employee.id],
+        date_from: weekdays.length > 1 ? days[0] : pop.day,
+        date_to: weekdays.length > 1 ? days[6] : pop.day,
+        weekdays,
+        template_id: t.id,
+        overwrite: true,
+      });
+      setPop(null);
+      assignments.reload();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearDay() {
+    if (!pop?.current) return;
+    setBusy(true);
+    try {
+      await api.delete(`/schedules/assignments/${pop.current.id}`);
+      setPop(null);
+      assignments.reload();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const sync = lastSync.data?.items[0];
+  const activeTemplates = (templates.data ?? []).filter((t) => t.is_active);
+  const popTemplate = pop?.current ? templateOf(pop.current) : undefined;
+  let lastSection: string | null = null;
+
+  return (
+    <div className="page sch">
+      <div className="sch-kicker">Supervisión · Horarios de agentes</div>
+      <div className="page-head">
+        <h1 className="sch-title">{fmtLongDate(day)}</h1>
+        <div className="row">
+          <button className="btn ghost" onClick={() => setTemplatesOpen(true)}>
+            Turnos base
+          </button>
           {canEdit && (
-            <button className="btn ghost sm" onClick={() => setTemplateModal("new")}>
-              <IconPlus /> Nuevo turno
+            <button className="btn" onClick={() => setAssigning(true)} disabled={!employees.data?.items.length}>
+              <IconPlus /> Asignar horario
             </button>
           )}
         </div>
-        <div className="row">
-          {templates.data?.map((t) => (
-            <button key={t.id} className="badge" style={{ cursor: canEdit ? "pointer" : "default", padding: "6px 12px", opacity: 1 }} onClick={() => canEdit && setTemplateModal(t)}>
-              <span className="swatch" style={{ background: t.color }} />
-              <b>{t.name}</b>
-              <span className="mono">
-                {hhmm(t.start_time)}–{hhmm(t.end_time)}
-              </span>
-              {t.crosses_midnight && <span className="caption">nocturno</span>}
-              {!t.is_active && <span className="caption">(inactivo)</span>}
-            </button>
+      </div>
+
+      <div className="sch-toolbar">
+        <div className="row" style={{ gap: 4 }}>
+          <button className="icon-btn" onClick={() => setStart(addDays(start, -7))} aria-label="Semana anterior">
+            <IconChevronLeft width={20} height={20} />
+          </button>
+          <span className="sch-week">
+            {fmtShort(days[0])} – {fmtShort(days[6])} {days[6].slice(0, 4)}
+          </span>
+          <button className="icon-btn" onClick={() => setStart(addDays(start, 7))} aria-label="Semana siguiente">
+            <IconChevronRight width={20} height={20} />
+          </button>
+          <button
+            className="btn ghost sm"
+            onClick={() => {
+              setStart(weekStart(today()));
+              setDayIndex((new Date(`${today()}T00:00:00Z`).getUTCDay() + 6) % 7);
+            }}
+          >
+            Hoy
+          </button>
+        </div>
+        {sync && (
+          <span className={sync.status === "ok" ? "muted" : "sch-warn"}>
+            Última actualización del CRM: {fmtDateTime(sync.received_at)}
+            {sync.status !== "ok" && ` · ${sync.status}`}
+          </span>
+        )}
+        <div className="spacer" />
+        <select className="input" style={{ width: 200 }} value={team} onChange={(e) => setTeam(e.target.value)} aria-label="Filtrar por team">
+          <option value="all">Todos los teams</option>
+          {allGroups.map((g) => (
+            <option key={g.key} value={g.key}>
+              {g.team?.name ?? "Sin team"}
+            </option>
           ))}
-          {templates.data?.length === 0 && <span className="muted">Cree turnos base (ej. “Mañana 7:00–16:00”) para asignarlos rápido.</span>}
+        </select>
+        <input className="input" style={{ width: 200 }} placeholder="Buscar agente o ID" value={query} onChange={(e) => setQuery(e.target.value)} />
+      </div>
+
+      <div className="sch-days">
+        {days.map((d, i) => {
+          const on = visible.filter((e) => byKey.has(`${e.id}|${d}`)).length;
+          return (
+            <button key={d} className={`sch-day${i === dayIndex ? " on" : ""}`} onClick={() => setDayIndex(i)}>
+              <span className="sch-day-top">
+                <b>
+                  {DOW[i]} {d.slice(8)}
+                </b>
+                {d === today() && <i>Hoy</i>}
+              </span>
+              <span className="caption">{on} en turno</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="sch-legend">
+        <span>
+          <span className="sch-hatch" /> Descanso (ubicación referencial)
+        </span>
+        {canEdit && <span>Clic en una fila para asignar el turno del día</span>}
+      </div>
+
+      {(assignments.error || punches.error) && <div className="alert">{assignments.error || punches.error}</div>}
+
+      <div className="sch-scroll">
+        <div className="sch-board">
+          <div className="sch-grid sch-hist-row">
+            <div className="sch-hist-label">
+              <b>Agentes en turno por hora</b>
+              {thin.length > 0 && visible.length > 0 && (
+                <span className="sch-warn">
+                  Menos de {MIN_COVERAGE}: {thin.map(hourLabel).join(", ")}
+                </span>
+              )}
+            </div>
+            <div className="sch-hist">
+              {coverage.map((v, k) => (
+                <div key={k} className={`sch-hist-col${v < MIN_COVERAGE ? " thin" : ""}`}>
+                  <span>{v}</span>
+                  <div style={{ height: `${Math.max(4, (v / maxCoverage) * 100 - 24)}%` }} />
+                </div>
+              ))}
+            </div>
+            <div />
+          </div>
+
+          <div className="sch-grid sch-head">
+            <span>Agente · marcación</span>
+            <div className="sch-hours">
+              {hours.map((h) => (
+                <span key={h}>{hourLabel(h)}</span>
+              ))}
+            </div>
+            <div className="sch-head-week">
+              <span>Semana</span>
+              <span>Horas</span>
+            </div>
+          </div>
+
+          {groups.map((g) => {
+            const section = g.team?.section ?? null;
+            const showSection = section !== null && section !== lastSection;
+            lastSection = section;
+            const open = teams.isOpen(g.key);
+            const teamHours = g.items.reduce((s, e) => s + weekHours(e), 0);
+            const noShift = g.items.filter((e) => !byKey.has(`${e.id}|${day}`)).length;
+            const SectionIcon = section === "lineas" ? IconSim : IconHouse;
+            return (
+              <Fragment key={g.key}>
+                {showSection && (
+                  <div className="sch-section">
+                    <SectionIcon width={14} height={14} /> {SECTION_LABEL[section]}
+                  </div>
+                )}
+                <section className="sch-team">
+                  <div className="sch-team-head">
+                    <button className={`sch-team-toggle${open ? "" : " closed"}`} onClick={() => teams.toggle(g.key)} aria-expanded={open}>
+                      <IconChevronDown width={14} height={14} />
+                      <span>{g.team?.name ?? "Sin team"}</span>
+                    </button>
+                    <span className="muted">
+                      {g.items.length} agente{g.items.length === 1 ? "" : "s"} · {fmtHours(teamHours)} semana
+                    </span>
+                    {noShift > 0 && <span className="caption">{noShift} sin turno este día</span>}
+                  </div>
+                  {open &&
+                    g.items.map((e) => {
+                      const a = byKey.get(`${e.id}|${day}`);
+                      const m = mark(e, a);
+                      const total = weekHours(e);
+                      return (
+                        <div key={e.id} className="sch-grid sch-row">
+                          <div className="sch-agent">
+                            <Link to={`/empleados/${e.id}`} className="sch-name">
+                              {e.full_name}
+                              {g.supervisor?.id === e.id && <i> · Supervisor</i>}
+                            </Link>
+                            <div className={m.warn ? "sch-warn" : "caption"}>{m.text}</div>
+                          </div>
+                          <div
+                            className={`sch-track${canEdit ? " editable" : ""}`}
+                            style={{ backgroundSize: `calc(100% / ${span}) 100%` }}
+                            onClick={(ev) => openPop(ev, e)}
+                            role={canEdit ? "button" : undefined}
+                            aria-label={canEdit ? `Asignar turno a ${e.full_name}` : undefined}
+                          >
+                            {a ? (
+                              <ShiftBar a={a} day={day} h0={h0} span={span} color={colorOf(a)} template={templateOf(a)} />
+                            ) : (
+                              <span className="sch-empty">{canEdit ? "Sin turno — clic para asignar" : "Sin turno"}</span>
+                            )}
+                          </div>
+                          <div className="sch-weekcol">
+                            <div className="sch-squares">
+                              {days.map((d, i) => {
+                                const wa = byKey.get(`${e.id}|${d}`);
+                                return (
+                                  <span
+                                    key={d}
+                                    title={`${DOW[i]}: ${wa ? `${fmtTime(wa.start_at)}–${fmtTime(wa.end_at)}` : "Sin turno"}`}
+                                    className={`${wa ? "" : "none"}${i === dayIndex ? " sel" : ""}`}
+                                    style={wa ? { background: colorOf(wa) } : undefined}
+                                  />
+                                );
+                              })}
+                            </div>
+                            <b className={total > WEEK_LIMIT_HOURS ? "sch-warn" : total ? "" : "muted"}>{fmtHours(total)}</b>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </section>
+              </Fragment>
+            );
+          })}
+          {employees.data && visible.length === 0 && (
+            <div className="empty">{employees.data.items.length ? "Ningún agente coincide con el filtro." : "Registre empleados para poder asignarles horarios."}</div>
+          )}
         </div>
       </div>
 
-      <div className="card">
-        <div className="card-head">
-          <div className="row">
-            <button className="icon-btn" onClick={() => setStart(addDays(start, -7))} aria-label="Semana anterior">
-              <IconChevronLeft width={20} height={20} />
-            </button>
-            <h3 className="mono">
-              {start} → {end}
-            </h3>
-            <button className="icon-btn" onClick={() => setStart(addDays(start, 7))} aria-label="Semana siguiente">
-              <IconChevronRight width={20} height={20} />
-            </button>
-            <button className="btn ghost sm" onClick={() => setStart(weekStart(today()))}>
-              Hoy
-            </button>
-          </div>
-          <input className="input" style={{ width: 240 }} placeholder="Filtrar empleados" value={filter} onChange={(e) => setFilter(e.target.value)} />
-        </div>
-        {assignments.error && <div className="alert">{assignments.error}</div>}
-        <div className="table-wrap">
-          <div className="week">
-            <div className="wh">Empleado</div>
-            {days.map((d) => (
-              <div key={d} className={`wh${d === today() ? " today" : ""}`}>
-                {fmtShortDay(d)}
-              </div>
+      {pop && (
+        <>
+          <div className="sch-pop-backdrop" onClick={() => setPop(null)} />
+          <div className="sch-pop" style={{ top: pop.top, left: pop.left }} role="dialog" aria-label="Asignar turno">
+            <div className="caption sch-pop-title">
+              {pop.employee.full_name} · {DOW[pop.dayIndex]} {pop.day.slice(8)}
+            </div>
+            {error && <div className="alert">{error}</div>}
+            {activeTemplates.map((t) => (
+              <button key={t.id} className={`sch-pop-item${popTemplate?.id === t.id ? " on" : ""}`} disabled={busy} onClick={() => applyTemplate(t, [pop.dayIndex])}>
+                <span className="row" style={{ gap: 8 }}>
+                  <span className="swatch" style={{ background: t.color, borderRadius: 4 }} />
+                  {t.name}
+                </span>
+                <span className="caption">
+                  {hhmm(t.start_time)}–{hhmm(t.end_time)}
+                  {t.break_minutes ? ` · ${t.break_minutes} min desc.` : ""}
+                </span>
+              </button>
             ))}
-            {groupByTeam(visible).map((g) => (
-              <Fragment key={g.key}>
-                <div className="team-head">
-                  <b>{g.team?.name ?? "Sin equipo"}</b>
-                  {g.team && <span className="caption">{SECTION_LABEL[g.team.section]}</span>}
-                  <span className="caption">· {g.items.length}</span>
-                </div>
-                {g.items.map((e) => (
-                  <Row key={e.id} employee={e} days={days} byKey={byKey} templateById={templateById} canEdit={canEdit} onRemove={remove} />
-                ))}
-              </Fragment>
-            ))}
+            {activeTemplates.length === 0 && <div className="caption sch-pop-title">Cree un turno base para asignarlo con un clic.</div>}
+            {pop.current?.source === "crm" && (
+              <div className="caption sch-pop-note">Este turno vino del CRM. Si lo cambia aquí, el CRM ya no lo sobrescribe; si lo quita, el próximo envío del CRM lo vuelve a poner.</div>
+            )}
+            <div className="sch-pop-foot">
+              {popTemplate && (
+                <button className="btn ghost sm" disabled={busy} onClick={() => applyTemplate(popTemplate, [0, 1, 2, 3, 4, 5])}>
+                  Aplicar {popTemplate.name} a Lun–Sáb
+                </button>
+              )}
+              {pop.current && (
+                <button className="btn ghost sm" disabled={busy} onClick={clearDay}>
+                  Quitar turno del día
+                </button>
+              )}
+            </div>
           </div>
-          {employees.data?.items.length === 0 && <div className="empty">Registre empleados para poder asignarles horarios.</div>}
-        </div>
-      </div>
+        </>
+      )}
 
       {assigning && (
         <AssignModal
           employees={employees.data?.items ?? []}
-          templates={(templates.data ?? []).filter((t) => t.is_active)}
-          defaultFrom={start}
-          defaultTo={end}
+          templates={activeTemplates}
+          defaultFrom={days[0]}
+          defaultTo={days[6]}
           onClose={() => setAssigning(false)}
           onDone={() => {
             setAssigning(false);
@@ -141,71 +436,79 @@ export function Schedules() {
           }}
         />
       )}
-      {templateModal && (
-        <TemplateModal
-          template={templateModal === "new" ? null : templateModal}
-          onClose={() => setTemplateModal(null)}
-          onSaved={() => {
-            setTemplateModal(null);
-            templates.reload();
-          }}
-        />
+      {templatesOpen && (
+        <TemplatesModal templates={templates.data ?? []} canEdit={canEdit} onClose={() => setTemplatesOpen(false)} onSaved={templates.reload} />
       )}
     </div>
   );
 }
 
-function Row({
-  employee,
-  days,
-  byKey,
-  templateById,
-  canEdit,
-  onRemove,
-}: {
-  employee: Employee;
-  days: string[];
-  byKey: Map<string, ShiftAssignment>;
-  templateById: Map<number, ShiftTemplate>;
-  canEdit: boolean;
-  onRemove: (a: ShiftAssignment) => void;
-}) {
+const shortMonth = new Intl.DateTimeFormat("es-SV", { timeZone: "UTC", day: "numeric", month: "short" });
+const fmtShort = (ymd: string) => shortMonth.format(new Date(`${ymd}T00:00:00Z`)).replace(".", "");
+
+function ShiftBar({ a, day, h0, span, color, template }: { a: ShiftAssignment; day: string; h0: number; span: number; color: string; template?: ShiftTemplate }) {
+  const s = hoursFrom(day, a.start_at);
+  const e = hoursFrom(day, a.end_at);
+  const len = e - s;
+  // El descanso se dibuja a mitad del turno: el horario no dice a qué hora se toma.
+  const brk = a.break_minutes / 60;
+  const brkLeft = len > brk ? ((len - brk) / 2 / len) * 100 : 0;
   return (
-    <>
-      <div className="emp">
-        <Link to={`/empleados/${employee.id}`} style={{ color: "var(--text)" }}>
-          {employee.full_name}
-        </Link>
-        <div className="caption">{employee.badge_number ? `ID reloj ${employee.badge_number}` : employee.code}</div>
+    <div
+      className="sch-bar"
+      style={{ left: `${((s - h0) / span) * 100}%`, width: `${(len / span) * 100}%`, background: color, color: readableOn(color) }}
+      title={a.notes ?? undefined}
+    >
+      <span>
+        {fmtTime(a.start_at)}–{fmtTime(a.end_at)} · {template?.name ?? "Personalizado"}
+        {a.source === "crm" && " · CRM"}
+      </span>
+      {brk > 0 && <div className="sch-bar-break" style={{ left: `${brkLeft}%`, width: `${(brk / len) * 100}%` }} title={`Descanso de ${a.break_minutes} min`} />}
+    </div>
+  );
+}
+
+function TemplatesModal({ templates, canEdit, onClose, onSaved }: { templates: ShiftTemplate[]; canEdit: boolean; onClose: () => void; onSaved: () => void }) {
+  const [editing, setEditing] = useState<ShiftTemplate | "new" | null>(null);
+  if (editing)
+    return (
+      <TemplateModal
+        template={editing === "new" ? null : editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          onSaved();
+        }}
+      />
+    );
+  return (
+    <Modal title="Turnos base" onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {templates.map((t) => (
+          <button key={t.id} className="sch-pop-item" disabled={!canEdit} onClick={() => setEditing(t)}>
+            <span className="row" style={{ gap: 8 }}>
+              <span className="swatch" style={{ background: t.color, borderRadius: 4 }} />
+              <b>{t.name}</b>
+              {!t.is_active && <span className="caption">(inactivo)</span>}
+            </span>
+            <span className="caption">
+              {hhmm(t.start_time)}–{hhmm(t.end_time)} · {t.break_minutes} min descanso{t.crosses_midnight ? " · nocturno" : ""}
+            </span>
+          </button>
+        ))}
+        {templates.length === 0 && <div className="muted">Cree turnos base (ej. “Mañana 8:00–17:00”) para asignarlos con un clic.</div>}
       </div>
-      {days.map((d) => {
-        const a = byKey.get(`${employee.id}|${d}`);
-        const tpl = a?.template_id ? templateById.get(a.template_id) : undefined;
-        return (
-          <div key={d} className="cell-day">
-            {a ? (
-              <div className="shift-pill" style={{ borderLeftColor: tpl?.color ?? "var(--accent)" }} title={a.notes ?? undefined}>
-                <b className="mono">
-                  {fmtTime(a.start_at)}–{fmtTime(a.end_at)}
-                </b>
-                <span className="caption">
-                  {a.source === "crm" ? <span className="badge accent" style={{ padding: "0 6px" }}>CRM</span> : (tpl?.name ?? "Manual")}
-                </span>
-                {canEdit && (
-                  <button className="icon-btn" onClick={() => onRemove(a)} aria-label="Quitar horario">
-                    <IconX width={12} height={12} />
-                  </button>
-                )}
-              </div>
-            ) : (
-              <span className="caption" style={{ alignSelf: "center" }}>
-                Libre
-              </span>
-            )}
-          </div>
-        );
-      })}
-    </>
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose}>
+          Cerrar
+        </button>
+        {canEdit && (
+          <button className="btn" onClick={() => setEditing("new")}>
+            <IconPlus /> Nuevo turno
+          </button>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -432,7 +735,7 @@ function TemplateModal({ template, onClose, onSaved }: { template: ShiftTemplate
                   key={c}
                   aria-label={c}
                   onClick={() => setForm({ ...form, color: c })}
-                  style={{ width: 32, height: 32, borderRadius: 999, background: c, border: form.color === c ? "3px solid #ffffff" : "3px solid transparent", cursor: "pointer" }}
+                  style={{ width: 32, height: 32, borderRadius: 999, background: c, border: form.color === c ? "3px solid var(--text)" : "3px solid transparent", cursor: "pointer" }}
                 />
               ))}
             </div>

@@ -2,7 +2,8 @@ import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { IconLink, IconPlus } from "../components/Icons";
-import { api, groupByTeam, SECTION_LABEL, type Department, type Employee, type EmployeeInput, type Page, type UnmappedBadge } from "../lib/api";
+import { SectionBanner, TeamHeader, useCollapsedTeams } from "../components/TeamGroups";
+import { api, groupByTeam, type Department, type Employee, type EmployeeInput, type Page, type UnmappedBadge } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { fmtDateTime } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
@@ -20,6 +21,7 @@ export function Employees() {
   const [status, setStatus] = useState("activo");
   const [editing, setEditing] = useState<Editing>(null);
   const showUnmapped = params.get("vincular") === "1";
+  const teams = useCollapsedTeams("empleados.teams-plegados");
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(q), 250);
@@ -118,30 +120,36 @@ export function Employees() {
                 <th>ID reloj</th>
                 <th>ID CRM</th>
                 <th>Cargo</th>
-                <th>Equipo</th>
                 <th>Estado</th>
               </tr>
             </thead>
             <tbody>
               {groupByTeam(list.data?.items ?? []).map((g) => (
                 <Fragment key={g.key}>
+                {g.newSection && g.team && (
+                  <tr className="section-row">
+                    <td colSpan={5}>
+                      <SectionBanner group={g} />
+                    </td>
+                  </tr>
+                )}
                 <tr className="team-row">
-                  <td colSpan={6}>
-                    <b>{g.team?.name ?? "Sin equipo"}</b>
-                    {g.team && <span className="caption"> {SECTION_LABEL[g.team.section]}</span>}
-                    <span className="caption"> · {g.items.length}</span>
+                  <td colSpan={5}>
+                    <TeamHeader group={g} open={teams.isOpen(g.key)} onToggle={() => teams.toggle(g.key)} />
                   </td>
                 </tr>
-                {g.items.map((e) => (
+                {teams.isOpen(g.key) && g.items.map((e) => (
                 <tr key={e.id} className="clickable" onClick={() => navigate(`/empleados/${e.id}`)}>
                   <td>
                     <div>{e.full_name}</div>
-                    <div className="caption">{e.code}</div>
+                    <div className="caption">
+                      {e.code}
+                      {g.supervisor?.id === e.id && <b> · Supervisor</b>}
+                    </div>
                   </td>
                   <td>{e.badge_number ? <span className="badge accent">{e.badge_number}</span> : <span className="badge">Sin ID</span>}</td>
                   <td>{e.crm_agent_id ? <span className="badge accent">{e.crm_agent_id}</span> : <span className="muted">—</span>}</td>
                   <td>{e.position ?? <span className="muted">—</span>}</td>
-                  <td>{e.department?.name ?? <span className="muted">—</span>}</td>
                   <td>
                     <span className={`badge${e.status === "activo" ? " accent" : ""}`}>{e.status}</span>
                   </td>

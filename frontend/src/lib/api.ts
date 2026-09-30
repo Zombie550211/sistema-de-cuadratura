@@ -15,14 +15,35 @@ export interface Department {
   section: "residencial" | "lineas";
 }
 
-/** Agrupa empleados consecutivos por equipo. La API ya los devuelve en el orden del CRM. */
-export function groupByTeam<T extends { department: Department | null }>(items: T[]) {
-  const groups: { key: string; team: Department | null; items: T[] }[] = [];
+export interface TeamGroup<T> {
+  key: string;
+  team: Department | null;
+  /** Primer agente del team según el CRM: el CRM siempre manda al supervisor primero. */
+  supervisor: T | null;
+  items: T[];
+  /** true si el grupo abre una sección (Residencial / Líneas) distinta a la del anterior. */
+  newSection: boolean;
+}
+
+/** Agrupa empleados consecutivos por team. La API ya los devuelve en el orden del CRM. */
+export function groupByTeam<T extends { department: Department | null; crm_order: number | null }>(items: T[]) {
+  const groups: TeamGroup<T>[] = [];
   for (const item of items) {
     const key = item.department ? String(item.department.id) : "none";
     const last = groups[groups.length - 1];
-    if (last?.key === key) last.items.push(item);
-    else groups.push({ key, team: item.department, items: [item] });
+    if (last?.key === key) {
+      last.items.push(item);
+      continue;
+    }
+    const section = item.department?.section ?? "none";
+    const lastSection = last ? (last.team?.section ?? "none") : null;
+    groups.push({
+      key,
+      team: item.department,
+      supervisor: item.department && item.crm_order !== null ? item : null,
+      items: [item],
+      newSection: section !== lastSection,
+    });
   }
   return groups;
 }
@@ -54,6 +75,7 @@ export interface EmployeeInput {
 export interface Employee extends EmployeeInput {
   id: number;
   full_name: string;
+  crm_order: number | null;
   department: Department | null;
 }
 
