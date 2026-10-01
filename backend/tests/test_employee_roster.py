@@ -131,3 +131,42 @@ def test_roster_links_employees_created_by_crm(login):
     miguel = next(e for e in items if e["crm_agent_id"] == "150")
     assert (miguel["code"], miguel["full_name"], miguel["hire_date"]) == ("9 CN", "Miguel Eduardo Nuñez Perez", "2023-06-01")
     assert {e["full_name"] for e in items if e["crm_agent_id"] in ("152", "178")} == {"Andrea Flores", "Andrea Serrano"}
+
+
+LISTADO = (
+    "EMPLEADO\tCARGO\tINGRESOS A HONORARIOS\tINGRESO A PLANILLA\tLOCKER\tHUELLA LA24 COMEDOR\tDUI\tHUELLA LA17\tHUELLA LB8\n"
+    "BRYAN STANLEY SEGOVIA PLEITEZ\tAGENTE DE VENTAS \t03/07/2025\t01/08/2025\t18\t118\t00000000-0\tN/A\t27\n"
+    "ANA SOFIA LOPEZ PEREZ\tAGENTE DE VENTAS \t10/09/2026\t-\t32\t450\t00000000-1\t37\t18\n"
+)
+
+
+def test_parse_listado_uses_the_fingerprint_without_na():
+    rows, errors = parse_roster(LISTADO)
+    assert errors == []
+    assert [(r.code, r.badge, r.first_name, r.last_name, r.position, r.hire_date) for r in rows] == [
+        (None, "27", "Bryan Stanley", "Segovia Pleitez", "Agente de ventas", date(2025, 7, 3)),
+        (None, "18", "Ana Sofia", "Lopez Perez", "Agente de ventas", date(2026, 9, 10)),
+    ]
+
+
+def test_parse_listado_rejects_repeated_fingerprint():
+    rows, errors = parse_roster(LISTADO.replace("\t18\n", "\t27\n"))
+    assert len(rows) == 1 and "Huella repetida" in errors[0].message
+
+
+def test_listado_sets_badge_on_existing_and_creates_new(login):
+    client = login("rrhh")
+    client.post("/api/employees/import", json={"text": ROSTER, "dry_run": False})
+
+    preview = client.post("/api/employees/import", json={"text": LISTADO}).json()
+    assert {r["badge"]: r["status"] for r in preview["rows"]} == {"27": "actualizar", "18": "nuevo"}
+
+    client.post("/api/employees/import", json={"text": LISTADO, "dry_run": False})
+    bryan = client.get("/api/employees", params={"q": "Pleitez"}).json()["items"][0]
+    assert (bryan["code"], bryan["badge_number"], bryan["hire_date"]) == ("28 CN", "27", "2025-07-03")
+    ana = client.get("/api/employees", params={"q": "Sofia"}).json()["items"][0]
+    assert (ana["code"], ana["badge_number"]) == ("18", "18")
+
+    # Ya enlazados por huella: volver a importar no cambia nada.
+    again = client.post("/api/employees/import", json={"text": LISTADO}).json()
+    assert (again["created"], again["updated"], again["unchanged"]) == (0, 0, 2)

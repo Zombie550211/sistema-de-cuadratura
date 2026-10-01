@@ -129,11 +129,12 @@ class RosterImportIn(BaseModel):
 
 class RosterRowOut(BaseModel):
     line: int
-    code: str
+    code: str | None
     first_name: str
     last_name: str
     position: str
-    hire_date: date
+    hire_date: date | None
+    badge: str | None = None
     status: str  # nuevo | actualizar | sin_cambios | ambiguo
     note: str | None = None
 

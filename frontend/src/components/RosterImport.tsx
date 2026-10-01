@@ -6,11 +6,12 @@ import { Modal } from "./Modal";
 
 interface RosterRow {
   line: number;
-  code: string;
+  code: string | null;
   first_name: string;
   last_name: string;
   position: string;
-  hire_date: string;
+  hire_date: string | null;
+  badge: string | null;
   status: "nuevo" | "actualizar" | "sin_cambios" | "ambiguo";
   note: string | null;
 }
@@ -31,7 +32,8 @@ const STATUS = {
   ambiguo: ["Revisar", "danger"],
 } as const;
 
-/** Pegar la nómina de RRHH desde Excel: código, nombre completo, cargo, fecha de ingreso. */
+/** Pegar la nómina de RRHH desde Excel: código, nombre completo, cargo, fecha de ingreso; o el
+ *  listado de personal con encabezados, que trae la huella (ID de reloj) en vez del código. */
 export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<RosterResult | null>(null);
@@ -58,7 +60,7 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
       {error && <div className="alert" style={{ marginBottom: 16 }}>{error}</div>}
       {!preview ? (
         <div className="field">
-          <span>Copie las columnas desde Excel y péguelas aquí: código · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa)</span>
+          <span>Copie las columnas desde Excel y péguelas aquí: código · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa). También puede pegar el listado de personal completo, con sus encabezados (EMPLEADO, CARGO, HUELLA…).</span>
           <textarea
             className="input mono"
             rows={12}
@@ -67,7 +69,7 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
             placeholder={"4 CN\tIRANIA CECILIA SERRANO MEJIA\tSUPERVISORA DE VENTAS\t07/04/2021"}
             autoFocus
           />
-          <span className="caption">Si el código ya existe se actualizan nombre, cargo y fecha de ingreso. El ID de reloj, el ID de CRM y el team no se tocan.</span>
+          <span className="caption">Si el empleado ya existe se actualizan nombre, cargo, fecha de ingreso y, del listado, la huella (ID de reloj, la columna HUELLA sin N/A). El ID de CRM y el team no se tocan.</span>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -93,6 +95,7 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
               <thead>
                 <tr>
                   <th>Código</th>
+                  <th>Huella</th>
                   <th>Nombres</th>
                   <th>Apellidos</th>
                   <th>Cargo</th>
@@ -102,12 +105,13 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
               </thead>
               <tbody>
                 {preview.rows.map((r) => (
-                  <tr key={r.code}>
-                    <td className="mono">{r.code}</td>
+                  <tr key={r.line}>
+                    <td className="mono">{r.code ?? "—"}</td>
+                    <td className="mono">{r.badge ?? "—"}</td>
                     <td>{r.first_name}</td>
                     <td>{r.last_name}</td>
                     <td>{r.position}</td>
-                    <td className="mono">{fmtDate(r.hire_date)}</td>
+                    <td className="mono">{r.hire_date ? fmtDate(r.hire_date) : "—"}</td>
                     <td>
                       <span className={`badge ${STATUS[r.status][1]}`} title={r.note ?? undefined}>
                         {STATUS[r.status][0]}
