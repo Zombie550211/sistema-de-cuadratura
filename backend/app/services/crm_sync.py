@@ -5,6 +5,7 @@ Reglas:
   nombre entre los empleados de la nómina sin ID de CRM (el CRM usa nombres cortos, p.ej.
   "Bryan Pleitez" para "Bryan Stanley Segovia Pleitez"); si tampoco, se crea el empleado.
 - El ID de reloj que manda el CRM es el que vale: se actualiza en el empleado y sus marcas se re-vinculan.
+- Los nombres se guardan con mayúscula inicial ("MIGUEL NUÑEZ" → "Miguel Nuñez"), igual los teams.
 - El nombre también: si llegan first_name y last_name y son distintos, se actualizan en el empleado
   (el CRM guarda el nombre legal completo de cada agente). Igual la fecha de ingreso (hire_date).
 - Dentro del periodo enviado, los horarios con origen 'crm' del agente se reemplazan por los del envío
@@ -25,7 +26,7 @@ from app.models import ApiClient, Department, Employee, IntegrationSync, ShiftAs
 from app.schemas.integration import AgentResult, CrmAgent, CrmSchedulePayload, SyncResult
 from app.services import audit
 from app.services.attendance_import import relink_badge
-from app.services.employee_roster import name_key
+from app.services.employee_roster import name_key, fix_case
 
 
 class AgentError(Exception):
@@ -42,7 +43,7 @@ def _department(db: Session, cache: dict[str, Department], name: str) -> Departm
     if key not in cache:
         dept = db.scalar(select(Department).where(Department.name.ilike(name.strip())))
         if dept is None:
-            dept = Department(name=name.strip())
+            dept = Department(name=fix_case(name))
             db.add(dept)
             db.flush()
         cache[key] = dept
@@ -90,8 +91,8 @@ def _resolve_employee(db: Session, agent: CrmAgent) -> tuple[Employee, bool]:
     employee = Employee(
         code=code,
         crm_agent_id=agent.crm_agent_id,
-        first_name=agent.first_name.strip(),
-        last_name=agent.last_name.strip(),
+        first_name=fix_case(agent.first_name),
+        last_name=fix_case(agent.last_name),
     )
     db.add(employee)
     db.flush()
@@ -111,7 +112,7 @@ def _apply_agent(
     employee, created = _resolve_employee(db, agent)
 
     if not created and agent.first_name and agent.last_name:
-        nombre, apellido = agent.first_name.strip(), agent.last_name.strip()
+        nombre, apellido = fix_case(agent.first_name), fix_case(agent.last_name)
         if (employee.first_name, employee.last_name) != (nombre, apellido):
             employee.first_name, employee.last_name = nombre, apellido
     if agent.hire_date and employee.hire_date != agent.hire_date:

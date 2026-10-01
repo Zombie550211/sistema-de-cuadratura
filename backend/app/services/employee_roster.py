@@ -3,8 +3,10 @@
     4 CN<TAB>IRANIA CECILIA SERRANO MEJIA<TAB>SUPERVISORA DE VENTAS<TAB>07/04/2021
 
 código · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa). Se pega tal cual desde Excel.
-El empleado se identifica por su código: si ya existe se actualizan nombre, cargo y fecha de
-ingreso; si no, se crea. Nunca se tocan el ID de reloj, el ID de CRM ni el team.
+El empleado se busca por su código y, si no, por nombre (el CRM pudo crearlo antes con código
+CRM-…; a ese se le pone el código de la nómina). Si existe se actualizan código, nombre, cargo y
+fecha de ingreso; si no, se crea. Si el nombre coincide con varias fichas no se toca nada y se
+avisa. Nunca se tocan el ID de reloj, el ID de CRM ni el team.
 """
 
 import re
@@ -38,9 +40,20 @@ class RosterError:
     message: str
 
 
-def _title(text: str) -> str:
+def title_name(text: str) -> str:
+    """'EMANUEL DE JESUS' → 'Emanuel de Jesus': mayúscula inicial y partículas en minúscula."""
     words = [w.capitalize() for w in text.lower().split()]
     return " ".join(w.lower() if w.upper() in PARTICLES and i else w for i, w in enumerate(words))
+
+
+_title = title_name
+
+
+def fix_case(text: str) -> str:
+    """Corrige solo lo que viene todo en mayúsculas o todo en minúsculas ('JONATHAN F' → 'Jonathan F');
+    lo que ya trae mayúsculas y minúsculas se respeta ('Ventas USA')."""
+    text = " ".join((text or "").split())
+    return title_name(text) if text.isupper() or text.islower() else text
 
 
 def split_name(full: str) -> tuple[str, str]:
@@ -98,24 +111,68 @@ def parse_roster(text: str) -> tuple[list[RosterRow], list[RosterError]]:
     return rows, errors
 
 
-def apply_roster(db: Session, rows: list[RosterRow]) -> dict[str, int]:
-    """Crea o actualiza por código. No hace commit: lo decide quien llama."""
-    existing = {e.code: e for e in db.scalars(select(Employee).where(Employee.code.in_([r.code for r in rows])))}
-    created = updated = unchanged = 0
+@dataclass
+class RosterMatch:
+    row: RosterRow
+    employee: Employee | None
+    status: str  # nuevo | actualizar | sin_cambios | ambiguo
+    note: str | None = None
+
+
+def _values(r: RosterRow) -> dict:
+    return dict(code=r.code, first_name=r.first_name, last_name=r.last_name, position=r.position, hire_date=r.hire_date)
+
+
+def match_roster(db: Session, rows: list[RosterRow]) -> list[RosterMatch]:
+    """A qué ficha corresponde cada fila: por código y, si no, por nombre."""
+    employees = db.scalars(select(Employee)).all()
+    by_code = {e.code: e for e in employees}
+    taken = {by_code[r.code].id for r in rows if r.code in by_code}
+    keys = {e.id: name_key(e.full_name) for e in employees}
+    result = []
     for r in rows:
-        values = dict(first_name=r.first_name, last_name=r.last_name, position=r.position, hire_date=r.hire_date)
-        employee = existing.get(r.code)
+        employee, note = by_code.get(r.code), None
         if employee is None:
-            db.add(Employee(code=r.code, **values))
-            created += 1
-        elif any(getattr(employee, k) != v for k, v in values.items()):
-            for k, v in values.items():
-                setattr(employee, k, v)
-            updated += 1
+            k = name_key(f"{r.first_name} {r.last_name}")
+            free = [e for e in employees if e.id not in taken]
+            # Mismo nombre; si no, el nombre corto del CRM contenido en el de la nómina (o al revés).
+            found = [e for e in free if keys[e.id] == k] or [
+                e for e in free if min(len(keys[e.id]), len(k)) >= 2 and (keys[e.id] <= k or k <= keys[e.id])
+            ]
+            if len(found) > 1:
+                names = ", ".join(f"{e.code} {e.full_name}" for e in found)
+                result.append(RosterMatch(r, None, "ambiguo", f"El nombre coincide con varias fichas: {names}. Corrija el nombre en una o use su código."))
+                continue
+            if found:
+                employee = found[0]
+                taken.add(employee.id)
+                note = f"Se enlaza con {employee.code} {employee.full_name}"
+        if employee is None:
+            result.append(RosterMatch(r, None, "nuevo"))
+        elif all(getattr(employee, k) == v for k, v in _values(r).items()):
+            result.append(RosterMatch(r, employee, "sin_cambios"))
         else:
-            unchanged += 1
+            result.append(RosterMatch(r, employee, "actualizar", note))
+    return result
+
+
+def apply_roster(db: Session, matches: list[RosterMatch]) -> dict[str, int]:
+    """Crea o actualiza según match_roster; las filas ambiguas no se tocan. No hace commit."""
+    counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
+    for m in matches:
+        if m.status == "nuevo":
+            db.add(Employee(**_values(m.row)))
+            counts["created"] += 1
+        elif m.status == "actualizar":
+            for k, v in _values(m.row).items():
+                setattr(m.employee, k, v)
+            counts["updated"] += 1
+        elif m.status == "sin_cambios":
+            counts["unchanged"] += 1
+        else:
+            counts["skipped"] += 1
     db.flush()
-    return {"created": created, "updated": updated, "unchanged": unchanged}
+    return counts
 
 
 def name_key(text: str) -> set[str]:

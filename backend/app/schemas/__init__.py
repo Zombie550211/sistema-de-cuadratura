@@ -134,7 +134,8 @@ class RosterRowOut(BaseModel):
     last_name: str
     position: str
     hire_date: date
-    status: str  # nuevo | actualizar | sin_cambios
+    status: str  # nuevo | actualizar | sin_cambios | ambiguo
+    note: str | None = None
 
 
 class RosterErrorOut(BaseModel):
@@ -149,6 +150,7 @@ class RosterImportOut(BaseModel):
     created: int = 0
     updated: int = 0
     unchanged: int = 0
+    skipped: int = 0
     applied: bool = False
 
 

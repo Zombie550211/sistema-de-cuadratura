@@ -124,11 +124,11 @@ def test_crm_name_updates_existing_employee(crm):
     assert body["employees_created"] == 0
     assert body["agents"][0]["employee_id"] == emp_id
     emp = client.get(f"/api/employees/{emp_id}").json()
-    assert (emp["first_name"], emp["last_name"]) == ("EDWARD MANUEL", "RAMIREZ CALDERON")
+    assert (emp["first_name"], emp["last_name"]) == ("Edward Manuel", "Ramirez Calderon")
     # Sin nombre en el envío no se toca.
     _send(client, headers, [_agent(first_name=None, last_name=None)])
     emp = client.get(f"/api/employees/{emp_id}").json()
-    assert (emp["first_name"], emp["last_name"]) == ("EDWARD MANUEL", "RAMIREZ CALDERON")
+    assert (emp["first_name"], emp["last_name"]) == ("Edward Manuel", "Ramirez Calderon")
 
 
 def test_crm_hire_date(crm):
@@ -267,4 +267,4 @@ def test_employees_listed_by_team_like_crm(crm):
     assert items[5]["department"]["section"] == "lineas"
 
     teams = [d["name"] for d in client.get("/api/departments").json()]
-    assert teams == ["TEAM MIGUEL NUÑEZ", "TEAM ROSA VIDES", "TEAM LINEAS CARLA"]
+    assert teams == ["Team Miguel Nuñez", "Team Rosa Vides", "Team Lineas Carla"]

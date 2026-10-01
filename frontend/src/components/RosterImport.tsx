@@ -11,7 +11,8 @@ interface RosterRow {
   last_name: string;
   position: string;
   hire_date: string;
-  status: "nuevo" | "actualizar" | "sin_cambios";
+  status: "nuevo" | "actualizar" | "sin_cambios" | "ambiguo";
+  note: string | null;
 }
 interface RosterResult {
   rows: RosterRow[];
@@ -19,10 +20,16 @@ interface RosterResult {
   created: number;
   updated: number;
   unchanged: number;
+  skipped: number;
   applied: boolean;
 }
 
-const STATUS = { nuevo: ["Nuevo", "accent"], actualizar: ["Se actualiza", "warn"], sin_cambios: ["Sin cambios", ""] } as const;
+const STATUS = {
+  nuevo: ["Nuevo", "accent"],
+  actualizar: ["Se actualiza", "warn"],
+  sin_cambios: ["Sin cambios", ""],
+  ambiguo: ["Revisar", "danger"],
+} as const;
 
 /** Pegar la nómina de RRHH desde Excel: código, nombre completo, cargo, fecha de ingreso. */
 export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
@@ -68,6 +75,7 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
             <span className="badge accent">{preview.created} nuevos</span>
             <span className="badge warn">{preview.updated} se actualizan</span>
             <span className="badge">{preview.unchanged} sin cambios</span>
+            {preview.skipped > 0 && <span className="badge danger">{preview.skipped} por revisar (no se tocan)</span>}
             {preview.errors.length > 0 && <span className="badge danger">{preview.errors.length} con errores</span>}
           </div>
           {preview.errors.length > 0 && (
@@ -101,7 +109,10 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
                     <td>{r.position}</td>
                     <td className="mono">{fmtDate(r.hire_date)}</td>
                     <td>
-                      <span className={`badge ${STATUS[r.status][1]}`}>{STATUS[r.status][0]}</span>
+                      <span className={`badge ${STATUS[r.status][1]}`} title={r.note ?? undefined}>
+                        {STATUS[r.status][0]}
+                      </span>
+                      {r.note && <div className="caption" style={{ maxWidth: 240, marginTop: 4 }}>{r.note}</div>}
                     </td>
                   </tr>
                 ))}

@@ -253,7 +253,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .team-toggle svg { transition: transform 0.15s; }
 .team-head-in.closed .team-toggle svg { transform: rotate(-90deg); }
 .team-toggle:hover { border-color: var(--accent); color: var(--accent-bright); }
-.team-name { font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: 0.02em; }
+.team-name { font-weight: 800; font-size: 14px; }
 .team-sup { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-bright); font-size: 12px; font-weight: 600; }
 .team-sup.none { background: var(--surface); color: var(--muted); }
 .team-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
