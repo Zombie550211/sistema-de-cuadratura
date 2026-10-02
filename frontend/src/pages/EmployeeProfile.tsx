@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { IconChevronLeft, IconChevronRight } from "../components/Icons";
+import { IconChevronLeft, IconChevronRight, IconFile } from "../components/Icons";
+import { type IssuedCertificate, printCertificate, SalaryCertificate, sanitizeCertificateHtml, TEMPLATES } from "../components/SalaryCertificate";
 import { useNow } from "../components/LiveClock";
-import { api, type Department, type Employee, type EmployeeSchedule, type WorkDay } from "../lib/api";
+import { api, AREAS, areaPath, DOCS, type Department, type Employee, type EmployeeSchedule, type WorkDay } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { addDays, fmtDateTime, fmtShortDay, fmtTime, fmtTimeSec, hoursFrom, today, weekStart } from "../lib/format";
+import { addDays, fmtBirthday, fmtDate, fmtDateTime, fmtMoney, fmtShortDay, fmtTime, fmtTimeSec, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 import { EmployeeForm } from "./EmployeeForm";
 
@@ -22,12 +23,17 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
   const canEdit = can("admin", "rrhh");
   const [start, setStart] = useState(() => weekStart(today()));
   const [editing, setEditing] = useState(false);
+  const [certificate, setCertificate] = useState(false);
   const end = addDays(start, 6);
 
   const employee = useAsync(() => api.get<Employee>(`/employees/${employeeId}`), [employeeId]);
   const schedule = useAsync(
     () => api.get<EmployeeSchedule>(`/employees/${employeeId}/schedule`, { date_from: start, date_to: end }),
     [employeeId, start, end],
+  );
+  const certificates = useAsync(
+    () => (canEdit ? api.get<IssuedCertificate[]>(`/employees/${employeeId}/certificates`) : Promise.resolve([])),
+    [employeeId, canEdit],
   );
   const departments = useAsync(() => (canEdit ? api.get<Department[]>("/departments") : Promise.resolve([])), [canEdit]);
 
@@ -57,8 +63,8 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
   return (
     <div className="page">
       {showBack && (
-        <Link to="/empleados" className="back-link">
-          <IconChevronLeft width={16} height={16} /> Empleados
+        <Link to={areaPath(e.area)} className="back-link">
+          <IconChevronLeft width={16} height={16} /> {AREAS.find((a) => a.area === e.area)!.label}
         </Link>
       )}
 
@@ -71,6 +77,7 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
               {[e.position, e.department?.name].filter(Boolean).join(" · ") || "Sin cargo ni campaña asignados"}
             </div>
             <div className="ids">
+              {e.user_code ? <span className="badge accent" title="ID de usuario">{e.user_code}</span> : <span className="badge warn" title="Se genera al cargar el cumpleaños">Sin ID de usuario</span>}
               <span className="badge">{e.code}</span>
               {e.badge_number ? <span className="badge accent">Reloj {e.badge_number}</span> : <span className="badge warn">Sin ID de reloj</span>}
               {e.crm_agent_id ? <span className="badge accent">CRM {e.crm_agent_id}</span> : <span className="badge">Sin ID de CRM</span>}
@@ -78,12 +85,47 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
             </div>
           </div>
           {canEdit && (
-            <button className="btn ghost" onClick={() => setEditing(true)}>
-              Editar datos
-            </button>
+            <div className="row">
+              <button className="btn ghost" onClick={() => setCertificate(true)}>
+                <IconFile /> Constancia salarial
+              </button>
+              <button className="btn ghost" onClick={() => setEditing(true)}>
+                Editar datos
+              </button>
+            </div>
           )}
         </div>
       </div>
+
+      <div className="card">
+        <div className="card-head">
+          <h3>Planilla</h3>
+          {e.termination_note && <span className="badge danger">{e.termination_note}</span>}
+        </div>
+        <dl className="facts">
+          <Fact label="Área" value={AREAS.find((a) => a.area === e.area)!.label} />
+          <Fact label="Sueldo" value={Number(e.base_salary) > 0 ? `${fmtMoney(e.base_salary)} · ${e.pay_frequency}` : null} />
+          <Fact label="Ingreso (honorarios)" value={e.hire_date && fmtDate(e.hire_date)} />
+          <Fact label="Ingreso a planilla" value={e.payroll_date && fmtDate(e.payroll_date)} />
+          <Fact label="DUI" value={e.dui} />
+          <Fact label="NIT" value={e.nit} />
+          <Fact label="ISSS" value={e.isss_number} />
+          <Fact label="AFP" value={[e.afp, e.nup].filter(Boolean).join(" · ") || null} />
+          <Fact label="Cuenta bancaria" value={e.bank_account} />
+          <Fact label="Cumpleaños" value={e.birthday && fmtBirthday(e.birthday)} />
+          <Fact label="Género" value={e.gender} />
+          <Fact label="Correo" value={e.email} />
+          <Fact label="Emergencia" value={e.emergency_contact} />
+          <Fact label="Locker" value={e.locker} />
+          <Fact
+            label="Huellas"
+            value={Object.entries(e.fingerprints).map(([clock, n]) => `${clock}: ${n}`).join(" · ") || null}
+          />
+          <Fact label="Expediente" value={DOCS.map(([key, label]) => `${e[key] ? "✓" : "✗"} ${label}`).join("  ")} />
+        </dl>
+      </div>
+
+      {canEdit && <Certificates items={certificates.data ?? []} error={certificates.error} name={e.full_name} />}
 
       <div className="stats">
         <Stat label="Horas programadas" value={fmtHours(totals.scheduled)} />
@@ -138,6 +180,7 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
         </div>
       </div>
 
+      {certificate && <SalaryCertificate employee={e} onClose={() => setCertificate(false)} onIssued={certificates.reload} />}
       {editing && (
         <EmployeeForm
           employee={e}
@@ -222,6 +265,80 @@ function DayRow({ day, maxHour }: { day: WorkDay; maxHour: number }) {
         </div>
       )}
     </>
+  );
+}
+
+/** Constancias emitidas: folio, quién y cuándo; se pueden volver a descargar tal como salieron. */
+function Certificates({ items, error, name }: { items: IssuedCertificate[]; error: string | null; name: string }) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  async function reprint(id: number) {
+    setBusy(id);
+    setFailed(null);
+    try {
+      const cert = await api.get<{ html: string }>(`/certificates/${id}`);
+      printCertificate(sanitizeCertificateHtml(cert.html), `Constancia laboral ${id} - ${name}`);
+    } catch (err) {
+      setFailed((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-head">
+        <h3>Constancias emitidas</h3>
+        <span className="caption">{items.length ? `${items.length} en total` : "Aún no se ha emitido ninguna"}</span>
+      </div>
+      {(error || failed) && <div className="alert">{error ?? failed}</div>}
+      {items.length > 0 && (
+        <div className="table-wrap">
+          <table className="table dense">
+            <thead>
+              <tr>
+                <th>Folio</th>
+                <th>Emitida</th>
+                <th>Emitida por</th>
+                <th>Plantilla</th>
+                <th className="num">Salario</th>
+                <th className="num">Bono / comisiones</th>
+                <th>Fecha en la constancia</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((c) => (
+                <tr key={c.id}>
+                  <td className="mono">{c.id}</td>
+                  <td className="nowrap">{fmtDateTime(c.issued_at)}</td>
+                  <td>{c.issued_by_name}</td>
+                  <td>{TEMPLATES.find((t) => t.id === c.template)?.label ?? c.template}</td>
+                  <td className="num">{fmtMoney(c.salary)}</td>
+                  <td className="num">{c.template === "salario" ? "—" : fmtMoney(c.extra)}</td>
+                  <td className="mono">{fmtDate(c.issue_date)}</td>
+                  <td className="num">
+                    <button className="btn ghost sm" disabled={busy === c.id} onClick={() => reprint(c.id)}>
+                      {busy === c.id ? "Abriendo…" : "Descargar"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Fact({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd className={value ? undefined : "muted"}>{value ?? "—"}</dd>
+    </div>
   );
 }
 

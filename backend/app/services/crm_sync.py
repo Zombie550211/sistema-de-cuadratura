@@ -1,13 +1,15 @@
 """Aplica los horarios que envía el CRM.
 
-Reglas:
+Empleados (la planilla) es la fuente oficial del personal: se registra a mano o con la nómina, y el
+CRM solo manda horarios. Reglas:
 - El agente se identifica por crm_agent_id. Si no existe se busca por ID de reloj; después por
-  nombre entre los empleados de la nómina sin ID de CRM (el CRM usa nombres cortos, p.ej.
-  "Bryan Pleitez" para "Bryan Stanley Segovia Pleitez"); si tampoco, se crea el empleado.
-- El ID de reloj que manda el CRM es el que vale: se actualiza en el empleado y sus marcas se re-vinculan.
-- Los nombres se guardan con mayúscula inicial ("MIGUEL NUÑEZ" → "Miguel Nuñez"), igual los teams.
-- El nombre también: si llegan first_name y last_name y son distintos, se actualizan en el empleado
-  (el CRM guarda el nombre legal completo de cada agente). Igual la fecha de ingreso (hire_date).
+  nombre entre los empleados sin ID de CRM (el CRM usa nombres cortos, p.ej. "Bryan Pleitez" para
+  "Bryan Stanley Segovia Pleitez"). Al encontrarlo se le guarda el ID de CRM.
+- Si no está en Empleados, el agente se rechaza (error): el CRM no crea fichas. RRHH lo registra y
+  el CRM lo reenvía.
+- El CRM no cambia los datos de la ficha (nombre, fecha de ingreso, ID de reloj). El ID de reloj
+  que manda solo se usa para encontrar al empleado, o se guarda si la ficha aún no tiene uno.
+- El team sí lo manda el CRM ("MIGUEL NUÑEZ" → "Miguel Nuñez").
 - Dentro del periodo enviado, los horarios con origen 'crm' del agente se reemplazan por los del envío
   (una fecha sin turno o con rest_day=true queda libre).
 - Un horario cargado a mano por RRHH ('manual') nunca se pisa: se reporta como conflicto.
@@ -26,7 +28,7 @@ from app.models import ApiClient, Department, Employee, IntegrationSync, ShiftAs
 from app.schemas.integration import AgentResult, CrmAgent, CrmSchedulePayload, SyncResult
 from app.services import audit
 from app.services.attendance_import import relink_badge
-from app.services.employee_roster import name_key, fix_case
+from app.services.employee_roster import fix_case, name_key
 
 
 class AgentError(Exception):
@@ -50,10 +52,10 @@ def _department(db: Session, cache: dict[str, Department], name: str) -> Departm
     return cache[key]
 
 
-def _resolve_employee(db: Session, agent: CrmAgent) -> tuple[Employee, bool]:
+def _resolve_employee(db: Session, agent: CrmAgent) -> Employee:
     employee = db.scalar(select(Employee).where(Employee.crm_agent_id == agent.crm_agent_id))
     if employee is not None:
-        return employee, False
+        return employee
 
     if agent.badge_number:
         employee = db.scalar(select(Employee).where(Employee.badge_number == agent.badge_number))
@@ -64,7 +66,7 @@ def _resolve_employee(db: Session, agent: CrmAgent) -> tuple[Employee, bool]:
                     f"{employee.crm_agent_id}"
                 )
             employee.crm_agent_id = agent.crm_agent_id
-            return employee, False
+            return employee
 
     wanted = name_key(f"{agent.first_name or ''} {agent.last_name or ''}")
     if len(wanted) >= 2:
@@ -76,27 +78,18 @@ def _resolve_employee(db: Session, agent: CrmAgent) -> tuple[Employee, bool]:
         ]
         if len(matches) == 1:
             matches[0].crm_agent_id = agent.crm_agent_id
-            return matches[0], False
+            return matches[0]
         if len(matches) > 1:
             raise AgentError(
                 f"El nombre coincide con varios empleados ({', '.join(f'{e.code} {e.full_name}' for e in matches)}): "
                 "ponga el ID de CRM en la ficha del empleado correcto"
             )
 
-    if not (agent.first_name and agent.last_name):
-        raise AgentError("Agente nuevo: se requieren first_name y last_name para crearlo")
-    code = f"CRM-{agent.crm_agent_id}"[:32]
-    if db.scalar(select(Employee.id).where(Employee.code == code)):
-        raise AgentError(f"Ya existe un empleado con código {code}")
-    employee = Employee(
-        code=code,
-        crm_agent_id=agent.crm_agent_id,
-        first_name=fix_case(agent.first_name),
-        last_name=fix_case(agent.last_name),
+    nombre = " ".join(filter(None, [agent.first_name, agent.last_name])) or "sin nombre"
+    raise AgentError(
+        f"El agente {nombre} no está en Empleados: regístrelo en la planilla (con su ID de reloj o "
+        "su nombre completo) y vuelva a enviar el horario"
     )
-    db.add(employee)
-    db.flush()
-    return employee, True
 
 
 def _apply_agent(
@@ -109,25 +102,18 @@ def _apply_agent(
     position: int,
 ) -> AgentResult:
     tz = get_settings().tz
-    employee, created = _resolve_employee(db, agent)
+    employee = _resolve_employee(db, agent)
 
-    if not created and agent.first_name and agent.last_name:
-        nombre, apellido = fix_case(agent.first_name), fix_case(agent.last_name)
-        if (employee.first_name, employee.last_name) != (nombre, apellido):
-            employee.first_name, employee.last_name = nombre, apellido
-    if agent.hire_date and employee.hire_date != agent.hire_date:
-        employee.hire_date = agent.hire_date
-
-    if agent.badge_number and agent.badge_number != employee.badge_number:
+    # La ficha manda: el ID de reloj del CRM solo se guarda si el empleado aún no tiene uno.
+    if agent.badge_number and not employee.badge_number:
         owner = db.scalar(select(Employee).where(Employee.badge_number == agent.badge_number))
         if owner is not None and owner.id != employee.id:
             raise AgentError(
                 f"El ID de reloj {agent.badge_number} ya está asignado a {owner.full_name} ({owner.code})"
             )
-        old = employee.badge_number
         employee.badge_number = agent.badge_number
         db.flush()
-        relink_badge(db, employee.id, old, agent.badge_number)
+        relink_badge(db, employee.id, None, agent.badge_number)
 
     if agent.campaign:
         employee.department_id = _department(db, departments, agent.campaign).id
@@ -183,13 +169,11 @@ def _apply_agent(
             counters.removed += 1
 
     db.flush()
-    if created:
-        counters.employees_created += 1
     return AgentResult(
         crm_agent_id=agent.crm_agent_id,
         status="conflicto" if conflicts else "ok",
         employee_id=employee.id,
-        employee_created=created,
+        employee_created=False,
         message=(
             "Estas fechas tienen un horario cargado manualmente por RRHH y no se modificaron"
             if conflicts

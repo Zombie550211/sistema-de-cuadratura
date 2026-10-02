@@ -89,6 +89,18 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .nav a.active { color: var(--text); background: var(--bg); box-shadow: inset 3px 0 0 var(--accent); }
 .nav a.active svg { color: var(--accent); }
 .nav svg { width: 20px; height: 20px; flex: none; }
+.nav-parent {
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 0; border-radius: var(--r-sm); background: none; cursor: pointer; text-align: left;
+  color: var(--muted); font-weight: 600; transition: color 0.25s, background 0.25s;
+}
+.nav-parent:hover { color: var(--text); background: var(--bg); }
+.nav-parent.active { color: var(--text); }
+.nav-parent.active svg { color: var(--accent); }
+.nav .nav-caret { width: 16px; height: 16px; margin-left: auto; transition: transform 0.15s; transform: rotate(-90deg); }
+.nav .nav-caret.open { transform: none; }
+.nav-sub { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px 21px; padding-left: 12px; border-left: 1px solid var(--line-strong); }
+.nav .nav-sub a { padding: 8px 12px; font-size: 13px; }
 .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: 16px; }
 .user-chip { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: var(--r-sm); background: var(--bg); }
 .avatar {
@@ -101,6 +113,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .main { min-width: 0; padding: 32px 40px 64px; }
 .page { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; animation: zeReveal 0.4s ease-out; }
+.page.wide { max-width: none; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .page-head p { margin: 4px 0 0; color: var(--muted); }
 .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -194,6 +207,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .table tbody tr:hover { background: var(--bg); }
 .table tr.clickable { cursor: pointer; }
 .table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.nowrap { white-space: nowrap; }
+.chips { display: flex; flex-wrap: nowrap; gap: 4px; }
+.table.dense th, .table.dense td { padding-left: 8px; padding-right: 8px; }
+.table.dense td { padding-top: 8px; padding-bottom: 8px; }
 .empty { padding: 48px 16px; text-align: center; color: var(--muted); }
 
 /* ---------- Chips ---------- */
@@ -248,7 +265,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .table .section-row:hover, .table .team-row:hover { background: none; }
 .table .team-row td { background: var(--bg); }
 .section-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface-2); color: var(--text); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
-.team-head-in { position: sticky; left: 0; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 12px; box-shadow: inset 4px 0 0 var(--accent); max-width: 100vw; }
+.team-head-in { position: sticky; left: 0; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 12px; box-shadow: inset 4px 0 0 var(--accent); max-width: 100%; }
 .team-toggle { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--muted); cursor: pointer; }
 .team-toggle svg { transition: transform 0.15s; }
 .team-head-in.closed .team-toggle svg { transform: rotate(-90deg); }
@@ -324,7 +341,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 12px 16px; gap: 12px; }
   .nav { flex-direction: row; overflow-x: auto; flex: 1 1 100%; order: 3; min-width: 0; }
-  .nav a { white-space: nowrap; }
+  .nav a, .nav-parent { white-space: nowrap; }
+  .nav-group, .nav-sub { display: flex; flex-direction: row; gap: 4px; }
+  .nav-sub { margin: 0; padding-left: 4px; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .stat .value { font-size: 32px; }
   .week { grid-template-columns: 160px repeat(7, 96px); }
@@ -341,6 +360,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .profile-head { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
 .profile-head .avatar { width: 64px; height: 64px; font-size: 24px; font-family: var(--font-display); }
 .profile-head .ids { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px 24px; margin: 0; }
+.facts dt { font-size: 12px; color: var(--muted); font-weight: 600; }
+.facts dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 .back-link { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-weight: 600; }
 .back-link:hover { color: var(--text); }
 .days-list { display: flex; flex-direction: column; }
@@ -475,4 +497,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .sch-title { font-size: 32px; }
   .sch-days { overflow-x: auto; }
   .sch-day { min-width: 96px; }
+}
+
+/* ---------- Constancia salarial ---------- */
+.cert-overlay { position: fixed; inset: 0; z-index: 60; display: grid; grid-template-columns: 360px minmax(0, 1fr); background: var(--bg); animation: fadeIn 0.2s ease-out; }
+.cert-panel { display: flex; flex-direction: column; gap: 14px; padding: 24px; overflow-y: auto; background: var(--surface); border-right: 1px solid var(--line); }
+.cert-panel .modal-head { margin-bottom: 4px; }
+.cert-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cert-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 4px; }
+.cert-stage { overflow: auto; padding: 32px; display: flex; justify-content: center; align-items: flex-start; }
+.cert-stage .cert-page:focus { box-shadow: 0 0 0 2px var(--accent), 0 6px 24px rgba(15, 23, 42, 0.18); }
+@media (max-width: 860px) {
+  .cert-overlay { grid-template-columns: 1fr; grid-template-rows: auto 1fr; overflow: auto; }
+  .cert-stage { padding: 16px; justify-content: flex-start; }
 }

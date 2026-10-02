@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from "react";
 
 import { Modal } from "../components/Modal";
-import { api, type Department, type Employee, type EmployeeInput } from "../lib/api";
+import { api, AREAS, DOCS, type Area, type Department, type Employee, type EmployeeInput } from "../lib/api";
 
 const EMPTY: EmployeeInput = {
   code: "",
+  user_code: null,
   badge_number: null,
   crm_agent_id: null,
   first_name: "",
@@ -17,12 +18,25 @@ const EMPTY: EmployeeInput = {
   email: null,
   phone: null,
   position: null,
+  area: null,
   department_id: null,
   hire_date: null,
   termination_date: null,
   base_salary: "0.00",
   pay_frequency: "quincenal",
   status: "activo",
+  payroll_date: null,
+  birthday: null,
+  gender: null,
+  bank_account: null,
+  locker: null,
+  fingerprints: {},
+  emergency_contact: null,
+  termination_note: null,
+  has_cv: false,
+  has_contract: false,
+  has_nda: false,
+  has_memo: false,
 };
 
 interface Props {
@@ -101,6 +115,15 @@ export function EmployeeForm({ employee, initial, departments, readOnly, onClose
             <input {...text("code")} required />
           </label>
           <label className="field">
+            <span>ID de usuario</span>
+            <input
+              {...text("user_code")}
+              placeholder="Se genera con iniciales y cumpleaños (KR1907)"
+              pattern="[A-Za-z]{2}\d{4}(-\d+)?"
+              title="Dos letras y día y mes de nacimiento, p.ej. KR1907"
+            />
+          </label>
+          <label className="field">
             <span>ID en el reloj de marcación</span>
             <input {...text("badge_number")} inputMode="numeric" placeholder="Ej. 83" />
           </label>
@@ -111,6 +134,17 @@ export function EmployeeForm({ employee, initial, departments, readOnly, onClose
           <label className="field">
             <span>Cargo</span>
             <input {...text("position")} placeholder="Agente, supervisor…" />
+          </label>
+          <label className="field">
+            <span>Área</span>
+            <select className="input" value={form.area ?? ""} disabled={readOnly} onChange={(e) => set("area", (e.target.value || null) as Area | null)}>
+              <option value="">Según el cargo</option>
+              {AREAS.map((a) => (
+                <option key={a.area} value={a.area}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="field">
             <span>Equipo</span>
@@ -144,6 +178,34 @@ export function EmployeeForm({ employee, initial, departments, readOnly, onClose
             <input {...text("phone")} />
           </label>
 
+          <div className="form-section">Datos personales</div>
+          <label className="field">
+            <span>Género</span>
+            <select className="input" value={form.gender ?? ""} disabled={readOnly} onChange={(e) => set("gender", e.target.value || null)}>
+              <option value="">—</option>
+              <option>Femenino</option>
+              <option>Masculino</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Cumpleaños (día y mes)</span>
+            <input
+              className="input"
+              type="date"
+              disabled={readOnly}
+              value={form.birthday ? `2000-${form.birthday}` : ""}
+              onChange={(e) => set("birthday", e.target.value ? e.target.value.slice(5) : null)}
+            />
+          </label>
+          <label className="field full">
+            <span>Contacto de emergencia</span>
+            <input {...text("emergency_contact")} placeholder="Nombre, parentesco y teléfono" />
+          </label>
+          <label className="field">
+            <span>Locker</span>
+            <input {...text("locker")} />
+          </label>
+
           <div className="form-section">Documentos</div>
           <label className="field">
             <span>DUI</span>
@@ -168,9 +230,22 @@ export function EmployeeForm({ employee, initial, departments, readOnly, onClose
               <option>AFP Confía</option>
               <option>AFP Crecer</option>
               <option>IPSFA</option>
+              <option>UPISSS</option>
               <option>No cotiza</option>
             </select>
           </label>
+
+          <div className="field full">
+            <span>Expediente entregado</span>
+            <div className="row">
+              {DOCS.map(([key, label]) => (
+                <label key={key} className="check">
+                  <input type="checkbox" checked={form[key]} disabled={readOnly} onChange={(e) => set(key, e.target.checked)} />
+                  {label}
+                </label>
+              ))}
+            </div>
+          </div>
 
           <div className="form-section">Contrato</div>
           <label className="field">
@@ -178,8 +253,16 @@ export function EmployeeForm({ employee, initial, departments, readOnly, onClose
             <input {...text("hire_date")} type="date" />
           </label>
           <label className="field">
+            <span>Ingreso a planilla</span>
+            <input {...text("payroll_date")} type="date" />
+          </label>
+          <label className="field">
             <span>Fecha de retiro</span>
             <input {...text("termination_date")} type="date" />
+          </label>
+          <label className="field">
+            <span>Motivo de finalización</span>
+            <input {...text("termination_note")} placeholder="Renuncia, despido, abandono…" />
           </label>
           <label className="field">
             <span>Salario base mensual (USD)</span>
@@ -191,6 +274,10 @@ export function EmployeeForm({ employee, initial, departments, readOnly, onClose
               <option value="quincenal">Quincenal</option>
               <option value="mensual">Mensual</option>
             </select>
+          </label>
+          <label className="field">
+            <span>Cuenta bancaria</span>
+            <input {...text("bank_account")} inputMode="numeric" />
           </label>
           <label className="field">
             <span>Estado</span>

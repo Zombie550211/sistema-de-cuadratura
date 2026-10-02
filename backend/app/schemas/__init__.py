@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -8,6 +8,7 @@ from app.models import EmployeeStatus, PayFrequency, Role
 from app.services.zk_attlog import normalize_badge
 
 T = TypeVar("T")
+Area = Literal["administrativo", "operativo", "supervisor", "ventas"]
 
 
 class ORM(BaseModel):
@@ -67,6 +68,8 @@ class DepartmentOut(ORM):
 
 class EmployeeBase(BaseModel):
     code: str = Field(min_length=1, max_length=32)
+    # Vacío: se genera con las iniciales y el cumpleaños (KR1907).
+    user_code: str | None = Field(default=None, max_length=16, pattern=r"^[A-Z]{2}\d{4}(-\d+)?$")
     badge_number: str | None = Field(default=None, max_length=32)
     crm_agent_id: str | None = Field(default=None, max_length=64)
     first_name: str = Field(min_length=1, max_length=100)
@@ -79,15 +82,34 @@ class EmployeeBase(BaseModel):
     email: str | None = Field(default=None, max_length=160)
     phone: str | None = Field(default=None, max_length=20)
     position: str | None = Field(default=None, max_length=120)
+    area: Area | None = None  # sin indicar, se deduce del cargo
     department_id: int | None = None
     hire_date: date | None = None
     termination_date: date | None = None
     base_salary: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
     pay_frequency: PayFrequency = PayFrequency.quincenal
     status: EmployeeStatus = EmployeeStatus.activo
+    payroll_date: date | None = None
+    birthday: str | None = Field(default=None, pattern=r"^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
+    gender: str | None = Field(default=None, max_length=10)
+    bank_account: str | None = Field(default=None, max_length=30)
+    locker: str | None = Field(default=None, max_length=10)
+    fingerprints: dict[str, str] = Field(default_factory=dict)
+    emergency_contact: str | None = Field(default=None, max_length=200)
+    termination_note: str | None = Field(default=None, max_length=200)
+    has_cv: bool = False
+    has_contract: bool = False
+    has_nda: bool = False
+    has_memo: bool = False
+
+    @field_validator("user_code", mode="before")
+    @classmethod
+    def _upper_code(cls, v):
+        return v.strip().upper() or None if isinstance(v, str) else v
 
     @field_validator("badge_number", "crm_agent_id", "dui", "nit", "isss_number", "nup", "afp", "email",
-                     "phone", "position", mode="before")
+                     "phone", "position", "birthday", "gender", "bank_account", "locker", "emergency_contact",
+                     "termination_note", mode="before")
     @classmethod
     def _blank_to_none(cls, v):
         if isinstance(v, str) and not v.strip():
@@ -110,6 +132,7 @@ class EmployeeUpdate(EmployeeBase):
 
 class EmployeeOut(ORM, EmployeeBase):
     id: int
+    area: Area
     full_name: str
     crm_order: int | None = None
     department: DepartmentOut | None
@@ -118,8 +141,32 @@ class EmployeeOut(ORM, EmployeeBase):
 class EmployeeBrief(ORM):
     id: int
     code: str
+    user_code: str | None = None
     full_name: str
     badge_number: str | None
+
+
+class CertificateIn(BaseModel):
+    template: Literal["bono", "comisiones", "salario"]
+    issue_date: date
+    salary: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+    extra: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
+    html: str = Field(min_length=1, max_length=200_000)
+
+
+class CertificateOut(ORM):
+    id: int
+    employee_id: int
+    template: str
+    issue_date: date
+    salary: Decimal
+    extra: Decimal
+    issued_by_name: str
+    issued_at: datetime
+
+
+class CertificateDetail(CertificateOut):
+    html: str
 
 
 class RosterImportIn(BaseModel):
@@ -135,6 +182,7 @@ class RosterRowOut(BaseModel):
     position: str
     hire_date: date | None
     badge: str | None = None
+    area: str | None = None
     status: str  # nuevo | actualizar | sin_cambios | ambiguo
     note: str | None = None
 

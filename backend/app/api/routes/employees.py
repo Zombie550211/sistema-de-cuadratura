@@ -7,6 +7,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, CurrentUser, Staff
 from app.models import (
+    AREAS,
+    SalaryCertificate,
     Department,
     Employee,
     EmployeeStatus,
@@ -14,8 +16,12 @@ from app.models import (
     Role,
     ShiftAssignment,
     User,
+    area_for,
 )
 from app.schemas import (
+    CertificateDetail,
+    CertificateIn,
+    CertificateOut,
     DepartmentIn,
     DepartmentOut,
     EmployeeCreate,
@@ -30,6 +36,7 @@ from app.schemas import (
 from app.services import audit
 from app.services.attendance_day import employee_days
 from app.services.attendance_import import relink_badge
+from app.services.user_code import assign_user_codes
 from app.services.employee_roster import apply_roster, match_roster, parse_roster
 
 router = APIRouter(tags=["empleados"])
@@ -39,6 +46,8 @@ def _integrity_message(exc: IntegrityError) -> str:
     text = str(exc.orig)
     if "badge_number" in text:
         return "Ese ID de reloj ya está asignado a otro empleado"
+    if "user_code" in text:
+        return "Ese ID de usuario ya está asignado a otro empleado"
     if "crm_agent_id" in text:
         return "Ese ID de CRM ya está asignado a otro empleado"
     if "dui" in text:
@@ -74,6 +83,7 @@ def list_employees(
     q: str | None = None,
     status_: Annotated[EmployeeStatus | None, Query(alias="status")] = None,
     department_id: int | None = None,
+    area: Annotated[str | None, Query(pattern="^(" + "|".join(AREAS) + ")$")] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
@@ -87,12 +97,15 @@ def list_employees(
                 Employee.code.ilike(like),
                 Employee.badge_number == q.strip(),
                 Employee.dui.ilike(like),
+                Employee.user_code.ilike(like),
             )
         )
     if status_:
         stmt = stmt.where(Employee.status == status_)
     if department_id:
         stmt = stmt.where(Employee.department_id == department_id)
+    if area:
+        stmt = stmt.where(Employee.area == area)
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     items = db.scalars(
@@ -142,7 +155,7 @@ def import_roster(data: RosterImportIn, db: DB, user: HR):
     rows, errors = parse_roster(data.text)
     matches = match_roster(db, rows)
     out = RosterImportOut(
-        rows=[RosterRowOut(**vars(m.row), status=m.status, note=m.note) for m in matches],
+        rows=[RosterRowOut(**vars(m.row), area=area_for(m.row.position) if m.row.extra else None, status=m.status, note=m.note) for m in matches],
         errors=[vars(e) for e in errors],
         created=sum(m.status == "nuevo" for m in matches),
         updated=sum(m.status == "actualizar" for m in matches),
@@ -164,7 +177,9 @@ def import_roster(data: RosterImportIn, db: DB, user: HR):
 
 @router.post("/employees", response_model=EmployeeOut, status_code=status.HTTP_201_CREATED)
 def create_employee(data: EmployeeCreate, db: DB, user: HR):
-    employee = Employee(**data.model_dump())
+    values = data.model_dump()
+    values["area"] = values["area"] or area_for(data.position, data.crm_agent_id)
+    employee = Employee(**values)
     db.add(employee)
     try:
         db.flush()
@@ -172,6 +187,7 @@ def create_employee(data: EmployeeCreate, db: DB, user: HR):
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, _integrity_message(exc))
     relink_badge(db, employee.id, None, employee.badge_number)
+    assign_user_codes(db, [employee])
     audit.record(db, user, "crear", "employee", employee.id, {"codigo": employee.code})
     db.commit()
     db.refresh(employee)
@@ -186,7 +202,10 @@ def update_employee(employee_id: int, data: EmployeeUpdate, db: DB, user: HR):
 
     old_badge = employee.badge_number
     changes = {}
-    for field, value in data.model_dump().items():
+    values = data.model_dump()
+    if values["area"] is None:
+        values["area"] = area_for(data.position, data.crm_agent_id) if data.position != employee.position else employee.area
+    for field, value in values.items():
         current = getattr(employee, field)
         if current != value:
             changes[field] = {"antes": str(current), "despues": str(value)}
@@ -197,8 +216,41 @@ def update_employee(employee_id: int, data: EmployeeUpdate, db: DB, user: HR):
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, _integrity_message(exc))
     relink_badge(db, employee.id, old_badge, employee.badge_number)
+    assign_user_codes(db, [employee])
     if changes:
         audit.record(db, user, "editar", "employee", employee.id, changes)
     db.commit()
     db.refresh(employee)
     return employee
+
+
+@router.get("/employees/{employee_id}/certificates", response_model=list[CertificateOut])
+def list_certificates(employee_id: int, db: DB, _: HR):
+    return db.scalars(
+        select(SalaryCertificate)
+        .where(SalaryCertificate.employee_id == employee_id)
+        .order_by(SalaryCertificate.issued_at.desc(), SalaryCertificate.id.desc())
+    ).all()
+
+
+@router.post("/employees/{employee_id}/certificates", response_model=CertificateOut, status_code=status.HTTP_201_CREATED)
+def issue_certificate(employee_id: int, data: CertificateIn, db: DB, user: HR):
+    """Se llama al descargar la constancia: guarda la hoja tal como salió y quién la emitió."""
+    if db.get(Employee, employee_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
+    cert = SalaryCertificate(employee_id=employee_id, issued_by_id=user.id, issued_by_name=user.full_name, **data.model_dump())
+    db.add(cert)
+    db.flush()
+    audit.record(db, user, "emitir", "salary_certificate", cert.id,
+                 {"empleado": employee_id, "plantilla": cert.template, "salario": str(cert.salary), "extra": str(cert.extra)})
+    db.commit()
+    db.refresh(cert)
+    return cert
+
+
+@router.get("/certificates/{certificate_id}", response_model=CertificateDetail)
+def get_certificate(certificate_id: int, db: DB, _: HR):
+    cert = db.get(SalaryCertificate, certificate_id)
+    if cert is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Constancia no encontrada")
+    return cert

@@ -10,7 +10,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { Layout } from "./components/Layout";
-import type { Role } from "./lib/api";
+import { AREAS, type Role } from "./lib/api";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { Dashboard } from "./pages/Dashboard";
 import { EmployeeProfile, EmployeeProfilePage } from "./pages/EmployeeProfile";
@@ -67,7 +67,10 @@ function App() {
         <Route path="marcaciones" element={<Punches />} />
         <Route path="importar" element={<Guard roles={["admin", "rrhh"]}><Import /></Guard>} />
         <Route path="horarios" element={<Guard roles={STAFF}><Schedules /></Guard>} />
-        <Route path="empleados" element={<Guard roles={STAFF}><Employees /></Guard>} />
+        <Route path="empleados" element={<Navigate to={`/empleados/${AREAS[0].slug}`} replace />} />
+        {AREAS.map((a) => (
+          <Route key={a.slug} path={`empleados/${a.slug}`} element={<Guard roles={STAFF}><Employees key={a.area} area={a.area} /></Guard>} />
+        ))}
         <Route path="empleados/:id" element={<Guard roles={STAFF}><EmployeeProfilePage /></Guard>} />
         <Route path="integraciones" element={<Guard roles={["admin", "rrhh"]}><Integrations /></Guard>} />
         <Route path="usuarios" element={<Guard roles={["admin"]}><Users /></Guard>} />

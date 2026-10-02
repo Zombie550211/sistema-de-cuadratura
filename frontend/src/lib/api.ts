@@ -54,8 +54,22 @@ export function groupByTeam<T extends { department: Department | null; crm_order
 
 export const SECTION_LABEL = { residencial: "Residencial", lineas: "Líneas" } as const;
 
+export type Area = "administrativo" | "operativo" | "supervisor" | "ventas";
+
+/** Las 4 secciones de Empleados, en el orden del menú, con su ruta /empleados/<slug>. */
+export const AREAS: { area: Area; slug: string; label: string }[] = [
+  { area: "administrativo", slug: "administrativo", label: "Administrativo" },
+  { area: "operativo", slug: "operativo", label: "Operativo" },
+  { area: "supervisor", slug: "supervisores", label: "Supervisores" },
+  { area: "ventas", slug: "agentes", label: "Agentes de ventas" },
+];
+
+export const areaPath = (area: Area) => `/empleados/${AREAS.find((a) => a.area === area)!.slug}`;
+
 export interface EmployeeInput {
   code: string;
+  /** ID de usuario: iniciales del nombre y apellido + día y mes de nacimiento (KR1907). Vacío: se genera solo. */
+  user_code: string | null;
   badge_number: string | null;
   crm_agent_id: string | null;
   first_name: string;
@@ -68,16 +82,42 @@ export interface EmployeeInput {
   email: string | null;
   phone: string | null;
   position: string | null;
+  /** null al crear: el backend la deduce del cargo. */
+  area: Area | null;
   department_id: number | null;
   hire_date: string | null;
   termination_date: string | null;
   base_salary: string;
   pay_frequency: "quincenal" | "mensual";
   status: "activo" | "inactivo";
+  // Planilla de RRHH
+  payroll_date: string | null;
+  /** MM-DD: la planilla no trae el año. */
+  birthday: string | null;
+  gender: string | null;
+  bank_account: string | null;
+  locker: string | null;
+  /** Número de huella en cada reloj, p.ej. { LA17: "26", "LA24 comedor": "89" }. */
+  fingerprints: Record<string, string>;
+  emergency_contact: string | null;
+  termination_note: string | null;
+  has_cv: boolean;
+  has_contract: boolean;
+  has_nda: boolean;
+  has_memo: boolean;
 }
+
+/** Documentos del expediente, en el orden de la planilla. */
+export const DOCS = [
+  ["has_cv", "CV"],
+  ["has_contract", "Contrato"],
+  ["has_nda", "Confidencialidad"],
+  ["has_memo", "Memorándum"],
+] as const;
 
 export interface Employee extends EmployeeInput {
   id: number;
+  area: Area;
   full_name: string;
   crm_order: number | null;
   department: Department | null;
@@ -86,6 +126,7 @@ export interface Employee extends EmployeeInput {
 export interface EmployeeBrief {
   id: number;
   code: string;
+  user_code: string | null;
   full_name: string;
   badge_number: string | null;
 }

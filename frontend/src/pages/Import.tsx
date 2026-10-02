@@ -104,7 +104,7 @@ export function Import() {
             <Cell label="Líneas inválidas" value={result.invalid_lines} />
           </div>
           {result.unknown_badges > 0 && (
-            <Link to="/empleados?vincular=1" className="alert warn" style={{ display: "block", marginTop: 16 }}>
+            <Link to="/empleados/agentes?vincular=1" className="alert warn" style={{ display: "block", marginTop: 16 }}>
               {result.unknown_badges} IDs del reloj no están vinculados a ningún empleado. Clic aquí para vincularlos.
             </Link>
           )}

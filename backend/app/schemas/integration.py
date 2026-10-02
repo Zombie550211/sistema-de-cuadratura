@@ -35,11 +35,12 @@ class CrmAgent(BaseModel):
 
     crm_agent_id: str = Field(min_length=1, max_length=64)
     badge_number: str | None = Field(default=None, max_length=32)
+    # Solo para encontrar al agente en Empleados por nombre; no cambian la ficha.
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
     campaign: str | None = Field(default=None, max_length=120)
     supervisor: str | None = Field(default=None, max_length=160)
-    hire_date: date | None = None  # fecha de ingreso (la lleva el CRM)
+    hire_date: date | None = None  # informativo: la fecha de ingreso la lleva Empleados
     shifts: list[CrmShift] = Field(default_factory=list, max_length=62)
 
     @field_validator("crm_agent_id")
@@ -96,7 +97,7 @@ class AgentResult(BaseModel):
     crm_agent_id: str
     status: str  # ok | conflicto | error
     employee_id: int | None = None
-    employee_created: bool = False
+    employee_created: bool = False  # siempre false: el CRM ya no crea empleados
     message: str | None = None
     conflict_dates: list[date] = []
 

@@ -76,3 +76,10 @@ export const ROLE_LABEL: Record<string, string> = {
   supervisor: "Supervisor",
   empleado: "Empleado",
 };
+
+const moneyFmt = new Intl.NumberFormat("es-SV", { style: "currency", currency: "USD" });
+export const fmtMoney = (amount: string | number) => moneyFmt.format(Number(amount));
+
+const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+/** '07-19' → '19 jul'. */
+export const fmtBirthday = (mmdd: string) => `${Number(mmdd.slice(3))} ${MONTHS[Number(mmdd.slice(0, 2)) - 1]}`;

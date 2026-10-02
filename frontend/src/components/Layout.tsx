@@ -1,9 +1,10 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { useState } from "react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 
-import type { Role } from "../lib/api";
+import { AREAS, type Role } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ROLE_LABEL } from "../lib/format";
-import { IconCalendar, IconClock, IconHome, IconLink, IconLogout, IconShield, IconUpload, IconUsers } from "./Icons";
+import { IconCalendar, IconChevronDown, IconClock, IconHome, IconLink, IconLogout, IconShield, IconUpload, IconUsers } from "./Icons";
 import { LiveClock } from "./LiveClock";
 
 const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }[] = [
@@ -15,6 +16,31 @@ const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }
   { to: "/integraciones", label: "Integración CRM", icon: IconLink, roles: ["admin", "rrhh"] },
   { to: "/usuarios", label: "Usuarios", icon: IconShield, roles: ["admin"] },
 ];
+
+/** Empleados se despliega en sus 4 secciones; queda abierto mientras se navega dentro de ellas. */
+function EmployeesNav() {
+  const inside = useLocation().pathname.startsWith("/empleados");
+  const [open, setOpen] = useState(inside);
+  const shown = open || inside;
+  return (
+    <div className="nav-group">
+      <button type="button" className={`nav-parent${inside ? " active" : ""}`} aria-expanded={shown} onClick={() => setOpen(!shown)}>
+        <IconUsers />
+        Empleados
+        <IconChevronDown className={`nav-caret${shown ? " open" : ""}`} />
+      </button>
+      {shown && (
+        <div className="nav-sub">
+          {AREAS.map((a) => (
+            <NavLink key={a.slug} to={`/empleados/${a.slug}`}>
+              {a.label}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Layout() {
   const { user, logout, can } = useAuth();
@@ -36,12 +62,16 @@ export function Layout() {
           </div>
         </div>
         <nav className="nav">
-          {LINKS.filter((l) => can(...l.roles)).map(({ to, label, icon: Icon }) => (
-            <NavLink key={to} to={to} end={to === "/"}>
-              <Icon />
-              {label}
-            </NavLink>
-          ))}
+          {LINKS.filter((l) => can(...l.roles)).map(({ to, label, icon: Icon }) =>
+            to === "/empleados" ? (
+              <EmployeesNav key={to} />
+            ) : (
+              <NavLink key={to} to={to} end={to === "/"}>
+                <Icon />
+                {label}
+              </NavLink>
+            ),
+          )}
         </nav>
         <div className="sidebar-foot">
           <LiveClock />

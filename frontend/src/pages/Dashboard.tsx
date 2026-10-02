@@ -68,13 +68,13 @@ export function Dashboard() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {!!data?.unmapped_badges && (
-              <Link to="/empleados?vincular=1" className="alert warn row" style={{ gap: 8 }}>
+              <Link to="/empleados/agentes?vincular=1" className="alert warn row" style={{ gap: 8 }}>
                 <IconLink width={16} height={16} />
                 Hay {data.unmapped_badges} IDs del reloj sin empleado. Vincúlelos para ver sus marcaciones por nombre.
               </Link>
             )}
             {!!data?.employees_without_badge && (
-              <Link to="/empleados" className="alert info">
+              <Link to="/empleados/agentes" className="alert info">
                 {data.employees_without_badge} empleados activos no tienen ID de reloj asignado.
               </Link>
             )}

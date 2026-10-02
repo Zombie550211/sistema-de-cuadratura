@@ -4,6 +4,10 @@ El CRM envía cada fin de semana los horarios que los supervisores cargaron para
 El sistema de cuadratura los usa para interpretar las marcaciones del reloj (entrada, salida,
 tardanzas, horas extra).
 
+**El CRM solo manda horarios.** La planilla de personal se lleva en **Empleados** del sistema de
+cuadratura (fichas registradas a mano o con la nómina importada). Un agente que no está registrado
+ahí se rechaza: RRHH lo registra y el CRM vuelve a enviar su horario.
+
 ## Autenticación
 
 - Un administrador del sistema de cuadratura genera la clave en **Integración CRM → Nueva clave API**.
@@ -60,10 +64,10 @@ Content-Type: application/json
 | `roster_complete` | No (`false`) | `true` indica que `agents` es la lista **completa** del periodo. Ver la regla 2. |
 | `date_from`, `date_to` | Sí | Periodo que cubre el envío (máximo 31 días). Normalmente lunes a domingo de la semana siguiente. |
 | `agents[].crm_agent_id` | Sí | ID del agente en el CRM. Es la llave principal entre ambos sistemas. |
-| `agents[].badge_number` | Recomendado | ID del agente en el **reloj de marcación**. Así el sistema enlaza sus marcas. |
-| `agents[].first_name`, `last_name` | Solo si el agente es nuevo | Si el agente no existe, se crea con estos datos. Si ya existe y llegan distintos, se actualizan: el nombre del CRM es el que vale. |
-| `agents[].campaign` | No | Campaña o departamento. Se crea si no existe. |
-| `agents[].hire_date` | No | Fecha de ingreso (`AAAA-MM-DD`). Si llega, se guarda o actualiza en el empleado. |
+| `agents[].badge_number` | Recomendado | ID del agente en el **reloj de marcación**. Sirve para encontrarlo en Empleados; solo se guarda si su ficha aún no tiene ID de reloj. |
+| `agents[].first_name`, `last_name` | Recomendado | Sirven para encontrar al agente en Empleados la primera vez (basta el nombre corto: "Bryan Pleitez"). No cambian el nombre de la ficha. |
+| `agents[].campaign` | No | Team del agente. Se crea si no existe y se asigna al agente. |
+| `agents[].hire_date` | No | Informativo: la fecha de ingreso la lleva Empleados y no se modifica. |
 | `agents[].supervisor` | No | Informativo. |
 | `shifts[].date` | Sí | Día en que **inicia** el turno (`AAAA-MM-DD`), dentro del periodo. |
 | `shifts[].start`, `end` | Sí, salvo día libre | Hora local de El Salvador (`HH:MM`). Si `end` es menor que `start`, el turno termina al día siguiente. |
@@ -89,11 +93,13 @@ Límites por envío: 3000 agentes, un turno por agente por día y un máximo de 
      periodo; un envío parcial con `true` le quitaría los turnos a los demás.
 3. **Ajustes manuales de RRHH:** si RRHH cambió un día a mano en el sistema de cuadratura, ese día
    no se sobrescribe. Se devuelve como `conflicto` con la fecha afectada.
-4. **Identificación del agente:** primero por `crm_agent_id`. Si no existe, por `badge_number`. Si
-   tampoco existe, se crea el agente.
-5. **El `badge_number` del CRM es el que vale:** si cambia, se actualiza en el sistema y las
-   marcaciones se vuelven a vincular. Si ese ID de reloj ya pertenece a otro agente, ese agente
-   devuelve `error` y los demás se aplican normalmente.
+4. **Identificación del agente:** primero por `crm_agent_id`. Si no existe, por `badge_number` y
+   después por nombre entre los empleados que aún no tienen ID de CRM; al encontrarlo se le guarda
+   el `crm_agent_id`. Si no está en Empleados, ese agente devuelve `error` ("no está en
+   Empleados") y los demás se aplican normalmente. El sistema **no crea empleados**.
+5. **La ficha de Empleados es la que vale:** el envío no cambia nombre, fecha de ingreso ni ID de
+   reloj. Si la ficha no tiene ID de reloj, se guarda el `badge_number` del envío y sus marcaciones
+   se vinculan; si ese ID ya pertenece a otro empleado, el agente devuelve `error`.
 
 ### Respuesta (200)
 
@@ -104,7 +110,7 @@ Límites por envío: 3000 agentes, un turno por agente por día y un máximo de 
   "date_from": "2026-10-05",
   "date_to": "2026-10-11",
   "agents_received": 2,
-  "employees_created": 1,
+  "employees_created": 0,
   "shifts_created": 2,
   "shifts_updated": 0,
   "shifts_removed": 0,
@@ -112,12 +118,15 @@ Límites por envío: 3000 agentes, un turno por agente por día y un máximo de 
   "errors": 1,
   "agents_released": 0,
   "agents": [
-    { "crm_agent_id": "A-100", "status": "ok", "employee_id": 7, "employee_created": true, "message": null, "conflict_dates": [] },
+    { "crm_agent_id": "A-100", "status": "ok", "employee_id": 7, "employee_created": false, "message": null, "conflict_dates": [] },
     { "crm_agent_id": "A-101", "status": "error", "employee_id": null, "employee_created": false,
-      "message": "El ID de reloj 50 ya está asignado a Ana López (E-050)", "conflict_dates": [] }
+      "message": "El agente Ana López no está en Empleados: regístrelo en la planilla (con su ID de reloj o su nombre completo) y vuelva a enviar el horario", "conflict_dates": [] }
   ]
 }
 ```
+
+`employees_created` y `employee_created` se mantienen por compatibilidad y ahora siempre son `0` /
+`false`.
 
 `status`: `ok` si todo se aplicó, `parcial` si hubo errores o conflictos en algunos agentes, y
 `error` si ningún agente se pudo aplicar.

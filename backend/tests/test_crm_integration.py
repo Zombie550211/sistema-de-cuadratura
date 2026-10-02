@@ -30,6 +30,13 @@ def _agent(crm_id="A-100", badge="83", **extra):
     }
 
 
+def _hire(client, code="E-083", badge="83", first="Carlos", last="Pérez"):
+    """Registra al empleado en la planilla: el CRM solo manda horarios de quien ya está en Empleados."""
+    r = client.post("/api/employees", json={"code": code, "first_name": first, "last_name": last, "badge_number": badge})
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
 def _send(client, headers, agents, **kw):
     return client.post("/api/integrations/crm/schedules", json={**WEEK, "agents": agents}, headers=headers, **kw)
 
@@ -47,8 +54,9 @@ def test_ping_and_revoked_key(crm):
     assert client.get("/api/integrations/crm/ping", headers=headers).status_code == 401
 
 
-def test_creates_agent_links_badge_and_assigns_week(crm):
+def test_links_employee_and_assigns_week(crm):
     client, headers = crm
+    _hire(client)
     # marcas previas del reloj con el ID 83, aún sin empleado
     client.post(
         "/api/attendance/imports",
@@ -59,12 +67,12 @@ def test_creates_agent_links_badge_and_assigns_week(crm):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "ok"
-    assert body["employees_created"] == 1
+    assert body["employees_created"] == 0
     assert body["shifts_created"] == 2
     emp_id = body["agents"][0]["employee_id"]
 
     emp = client.get(f"/api/employees/{emp_id}").json()
-    assert (emp["crm_agent_id"], emp["badge_number"], emp["code"]) == ("A-100", "83", "CRM-A-100")
+    assert (emp["crm_agent_id"], emp["badge_number"], emp["code"]) == ("A-100", "83", "E-083")
     assert emp["department"]["name"] == "Ventas USA"
     assert client.get("/api/attendance/unmapped-badges").json() == []
 
@@ -77,6 +85,7 @@ def test_creates_agent_links_badge_and_assigns_week(crm):
 
 def test_resend_replaces_week_without_duplicates(crm):
     client, headers = crm
+    _hire(client)
     _send(client, headers, [_agent()])
     changed = _agent(shifts=[{"date": "2026-10-05", "start": "09:00", "end": "18:00"}])
     body = _send(client, headers, [changed]).json()
@@ -92,6 +101,7 @@ def test_resend_replaces_week_without_duplicates(crm):
 
 def test_manual_schedule_is_not_overwritten(crm):
     client, headers = crm
+    _hire(client)
     emp_id = _send(client, headers, [_agent()]).json()["agents"][0]["employee_id"]
     client.post(
         "/api/schedules/assignments/bulk",
@@ -115,46 +125,51 @@ def test_existing_employee_matched_by_badge(crm):
     assert client.get(f"/api/employees/{existing['id']}").json()["crm_agent_id"] == "A-100"
 
 
-def test_crm_name_updates_existing_employee(crm):
+def test_unknown_agent_is_rejected_not_created(crm):
     client, headers = crm
-    first = _send(client, headers, [_agent(first_name="EDWARD", last_name="RAMIREZ")]).json()
-    emp_id = first["agents"][0]["employee_id"]
-    # El CRM ahora manda el nombre legal completo: se actualiza, sin crear otro empleado.
-    body = _send(client, headers, [_agent(first_name="EDWARD MANUEL", last_name="RAMIREZ CALDERON")]).json()
-    assert body["employees_created"] == 0
-    assert body["agents"][0]["employee_id"] == emp_id
-    emp = client.get(f"/api/employees/{emp_id}").json()
-    assert (emp["first_name"], emp["last_name"]) == ("Edward Manuel", "Ramirez Calderon")
-    # Sin nombre en el envío no se toca.
-    _send(client, headers, [_agent(first_name=None, last_name=None)])
-    emp = client.get(f"/api/employees/{emp_id}").json()
-    assert (emp["first_name"], emp["last_name"]) == ("Edward Manuel", "Ramirez Calderon")
+    body = _send(client, headers, [_agent()]).json()
+    assert body["status"] == "error" and body["employees_created"] == 0
+    assert body["agents"][0]["status"] == "error"
+    assert "no está en Empleados" in body["agents"][0]["message"]
+    assert client.get("/api/employees").json()["total"] == 0
+    assert client.get("/api/schedules/assignments", params={**WEEK}).json() == []
+
+    # RRHH lo registra y el CRM reenvía: ahora sí se aplica.
+    _hire(client)
+    assert _send(client, headers, [_agent()]).json()["agents"][0]["status"] == "ok"
 
 
-def test_crm_hire_date(crm):
+def test_crm_does_not_change_employee_data(crm):
     client, headers = crm
-    # Nuevo con fecha de ingreso, luego se corrige; sin fecha en el envío no se toca.
-    body = _send(client, headers, [_agent(hire_date="2026-09-16")]).json()
-    emp_id = body["agents"][0]["employee_id"]
-    assert client.get(f"/api/employees/{emp_id}").json()["hire_date"] == "2026-09-16"
-    _send(client, headers, [_agent(hire_date="2025-01-06")])
-    assert client.get(f"/api/employees/{emp_id}").json()["hire_date"] == "2025-01-06"
-    _send(client, headers, [_agent()])
-    assert client.get(f"/api/employees/{emp_id}").json()["hire_date"] == "2025-01-06"
+    emp = _hire(client, first="Edward Manuel", last="Ramirez Calderon")
+    client.put(f"/api/employees/{emp['id']}", json={**{k: v for k, v in emp.items() if k not in ("id", "full_name", "crm_order", "department")}, "hire_date": "2025-01-06"})
+    _send(client, headers, [_agent(first_name="EDWARD", last_name="RAMIREZ", hire_date="2026-09-16", badge_number="99")])
+    after = client.get(f"/api/employees/{emp['id']}").json()
+    assert (after["first_name"], after["last_name"], after["hire_date"], after["badge_number"]) == (
+        "Edward Manuel", "Ramirez Calderon", "2025-01-06", "83")
+    assert after["crm_agent_id"] == "A-100"
+
+
+def test_crm_badge_fills_empty_one(crm):
+    client, headers = crm
+    emp = _hire(client, badge=None)
+    _send(client, headers, [_agent()])  # se encuentra por nombre y se le guarda el ID de reloj
+    assert client.get(f"/api/employees/{emp['id']}").json()["badge_number"] == "83"
 
 
 def test_agent_errors_do_not_block_others(crm):
     client, headers = crm
     client.post("/api/employees", json={"code": "E-1", "first_name": "Otro", "last_name": "Agente", "badge_number": "50", "crm_agent_id": "Z-9"})
+    _hire(client, "E-077", "77", "Luis", "Alas")
     agents = [
         _agent("A-1", "50"),  # el ID 50 ya pertenece a otro agente del CRM
-        _agent("A-2", None, first_name=None),  # nuevo sin nombre
+        _agent("A-2", None, first_name="Nadie", last_name="Registrado"),  # no está en Empleados
         _agent("A-3", "77"),
     ]
     body = _send(client, headers, agents).json()
     assert body["status"] == "parcial"
     assert [a["status"] for a in body["agents"]] == ["error", "error", "ok"]
-    assert body["errors"] == 2 and body["shifts_created"] == 2 and body["employees_created"] == 1
+    assert body["errors"] == 2 and body["shifts_created"] == 2 and body["employees_created"] == 0
 
 
 def test_validation_errors(crm):
@@ -185,6 +200,7 @@ def test_profile_shows_crm_schedule_with_punches(crm, db):
         b"83\t2026-10-07 06:04:00\t1\t4\t1\t0\n"  # salida del turno nocturno del día 6
     )
     client.post("/api/attendance/imports", files={"file": ("BINH221860214_attlog.dat", attlog, "text/plain")})
+    _hire(client)
     emp_id = _send(client, headers, [_agent()]).json()["agents"][0]["employee_id"]
 
     r = client.get(f"/api/employees/{emp_id}/schedule", params={"date_from": "2026-10-05", "date_to": "2026-10-07"})
@@ -200,6 +216,8 @@ def test_profile_shows_crm_schedule_with_punches(crm, db):
 
 def test_employee_can_only_see_own_profile(crm, db):
     client, headers = crm
+    _hire(client, "E-1", "1", "Uno", "Agente")
+    _hire(client, "E-2", "2", "Dos", "Agente")
     body = _send(client, headers, [_agent("A-1", "1"), _agent("A-2", "2")]).json()
     own, other = (a["employee_id"] for a in body["agents"])
 
@@ -219,6 +237,8 @@ def test_employee_can_only_see_own_profile(crm, db):
 
 def test_roster_complete_releases_absent_agents_only(crm):
     client, headers = crm
+    _hire(client, "E-1", "1", "Uno", "Agente")
+    _hire(client, "E-2", "2", "Dos", "Agente")
     body = _send(client, headers, [_agent("A-1", "1"), _agent("A-2", "2")]).json()
     emp2 = body["agents"][1]["employee_id"]
     # RRHH ajusta a mano un día de A-2: eso nunca se toca
@@ -247,6 +267,7 @@ def test_employees_listed_by_team_like_crm(crm):
     client.post("/api/employees", json={"code": "E-1", "first_name": "Ana", "last_name": "Abarca"})
 
     def a(crm_id, first, last, team):
+        _hire(client, f"E-{100 + int(crm_id)}", None, first, last)
         return _agent(crm_id, None, first_name=first, last_name=last, campaign=team, shifts=[])
 
     # Orden del CRM: Residencial y luego Líneas; equipo por equipo; supervisor primero.

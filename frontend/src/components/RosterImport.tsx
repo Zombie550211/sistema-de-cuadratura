@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { api } from "../lib/api";
+import { api, AREAS } from "../lib/api";
 import { fmtDate } from "../lib/format";
 import { Modal } from "./Modal";
 
@@ -12,6 +12,7 @@ interface RosterRow {
   position: string;
   hire_date: string | null;
   badge: string | null;
+  area: string | null;
   status: "nuevo" | "actualizar" | "sin_cambios" | "ambiguo";
   note: string | null;
 }
@@ -60,7 +61,7 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
       {error && <div className="alert" style={{ marginBottom: 16 }}>{error}</div>}
       {!preview ? (
         <div className="field">
-          <span>Copie las columnas desde Excel y péguelas aquí: código · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa). También puede pegar el listado de personal completo, con sus encabezados (EMPLEADO, CARGO, HUELLA…).</span>
+          <span>Copie las columnas desde Excel y péguelas aquí: código · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa). También puede pegar la planilla completa de RRHH con sus encabezados (N°, EMPLEADO, CARGO, SUELDO…): se guardan sueldo, DUI, NIT, ISSS, AFP, cuenta, huellas, expediente y finalización. La columna de contraseñas se ignora.</span>
           <textarea
             className="input mono"
             rows={12}
@@ -100,6 +101,7 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
                   <th>Apellidos</th>
                   <th>Cargo</th>
                   <th>Ingreso</th>
+                  <th>Área</th>
                   <th />
                 </tr>
               </thead>
@@ -112,6 +114,7 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
                     <td>{r.last_name}</td>
                     <td>{r.position}</td>
                     <td className="mono">{r.hire_date ? fmtDate(r.hire_date) : "—"}</td>
+                    <td>{AREAS.find((a) => a.area === r.area)?.label ?? "—"}</td>
                     <td>
                       <span className={`badge ${STATUS[r.status][1]}`} title={r.note ?? undefined}>
                         {STATUS[r.status][0]}
