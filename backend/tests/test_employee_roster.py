@@ -64,8 +64,8 @@ def test_import_with_errors_saves_nothing(login):
     assert client.get("/api/employees").json()["total"] == 0
 
 
-def test_supervisor_cannot_import(login):
-    assert login("supervisor").post("/api/employees/import", json={"text": ROSTER}).status_code == 403
+def test_employee_role_cannot_import(login):
+    assert login("empleado").post("/api/employees/import", json={"text": ROSTER}).status_code == 403
 
 
 def test_crm_agent_matched_to_roster_by_short_name(login):
@@ -291,6 +291,6 @@ def test_certificates_record_who_issued_them(login):
     assert client.get(f"/api/certificates/{cert['id']}").json()["html"] == body["html"]
     assert client.post("/api/employees/9999/certificates", json=body).status_code == 404
 
-    sup = login("supervisor")
+    sup = login("empleado")
     assert sup.get(f"/api/employees/{emp['id']}/certificates").status_code == 403
     assert sup.post(f"/api/employees/{emp['id']}/certificates", json=body).status_code == 403

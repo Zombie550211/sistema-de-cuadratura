@@ -38,7 +38,8 @@ def require_roles(*roles: Role) -> Callable[[User], User]:
 # Atajos por nivel de acceso
 Admin = Annotated[User, Depends(require_roles(Role.admin))]
 HR = Annotated[User, Depends(require_roles(Role.admin, Role.rrhh))]
-Staff = Annotated[User, Depends(require_roles(Role.admin, Role.rrhh, Role.supervisor))]
+# La app es solo para Recursos Humanos: el personal es admin y RRHH (el rol supervisor ya no se usa).
+Staff = Annotated[User, Depends(require_roles(Role.admin, Role.rrhh))]
 
 
 def get_api_client(

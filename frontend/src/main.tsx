@@ -22,7 +22,7 @@ import { Punches } from "./pages/Punches";
 import { Schedules } from "./pages/Schedules";
 import { Users } from "./pages/Users";
 
-const STAFF: Role[] = ["admin", "rrhh", "supervisor"];
+const STAFF: Role[] = ["admin", "rrhh"];
 
 function Guard({ roles, children }: { roles: Role[]; children: React.ReactNode }) {
   const { can } = useAuth();

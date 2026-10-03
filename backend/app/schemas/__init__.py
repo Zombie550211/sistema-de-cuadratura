@@ -37,12 +37,20 @@ class UserOut(ORM):
     employee_id: int | None
 
 
+def _no_supervisor(role):
+    if role == Role.supervisor:
+        raise ValueError("La aplicación es solo para Recursos Humanos: no se crean supervisores")
+    return role
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9._-]+$")
     full_name: str = Field(min_length=1, max_length=160)
     password: str = Field(min_length=8, max_length=128)
     role: Role = Role.empleado
     employee_id: int | None = None
+
+    _role = field_validator("role")(_no_supervisor)
 
 
 class UserUpdate(BaseModel):
@@ -51,6 +59,8 @@ class UserUpdate(BaseModel):
     role: Role | None = None
     is_active: bool | None = None
     employee_id: int | None = None
+
+    _role = field_validator("role")(_no_supervisor)
 
 
 # ---------- Empleados ----------

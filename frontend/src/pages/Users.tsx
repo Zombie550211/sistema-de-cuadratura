@@ -116,7 +116,7 @@ function UserModal({ user, isSelf, onClose, onSaved }: { user: User | null; isSe
           <label className="field">
             <span>Rol</span>
             <select className="input" value={role} onChange={(e) => setRole(e.target.value as Role)} disabled={isSelf}>
-              {Object.entries(ROLE_LABEL).map(([value, label]) => (
+              {Object.entries(ROLE_LABEL).filter(([value]) => value !== "supervisor" || user?.role === "supervisor").map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
                 </option>

@@ -30,8 +30,21 @@ def test_login_rejects_bad_password(client, db, login):
     assert r.status_code == 401
 
 
-def test_supervisor_cannot_create_employee(login):
-    client = login("supervisor")
+def test_supervisor_cannot_log_in_or_be_created(client, db, login):
+    from app.core.security import hash_password
+    from app.models import Role, User
+
+    db.add(User(username="sup", full_name="Sup", password_hash=hash_password("secreto123"), role=Role.supervisor))
+    db.commit()
+    r = client.post("/api/auth/login", json={"username": "sup", "password": "secreto123"})
+    assert r.status_code == 403 and "Recursos Humanos" in r.json()["detail"]
+    admin = login("admin")
+    r = admin.post("/api/users", json={"username": "nuevo", "full_name": "N", "password": "secreto123", "role": "supervisor"})
+    assert r.status_code == 422
+
+
+def test_employee_role_cannot_create_employee(login):
+    client = login("empleado")
     r = client.post("/api/employees", json={"code": "X", "first_name": "A", "last_name": "B"})
     assert r.status_code == 403
 
@@ -142,7 +155,7 @@ def test_bulk_assign_night_shift_crosses_midnight(login):
 
 
 def test_dashboard_summary(login):
-    client = login("supervisor")
+    client = login("rrhh")
     r = client.get("/api/dashboard/summary")
     assert r.status_code == 200
     assert r.json()["employees_active"] == 0

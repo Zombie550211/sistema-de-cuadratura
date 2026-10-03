@@ -10,14 +10,14 @@ import { addDays, fmtBirthday, fmtDate, fmtDateTime, fmtMoney, fmtShortDay, fmtT
 import { useAsync } from "../lib/useAsync";
 import { EmployeeForm } from "./EmployeeForm";
 
-/** Ruta /empleados/:id (personal de RRHH y supervisores). */
+/** Ruta /empleados/:id (personal de RRHH). */
 export function EmployeeProfilePage() {
   const { id } = useParams();
   return <EmployeeProfile employeeId={Number(id)} showBack />;
 }
 
 /** Perfil del empleado: datos, horario enviado por el CRM y marcaciones del reloj, día por día.
- *  Lo usan RRHH/supervisores y también el propio empleado (portal). */
+ *  Lo usa RRHH y también el propio empleado (portal). */
 export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: number; showBack?: boolean }) {
   const { can } = useAuth();
   const canEdit = can("admin", "rrhh");

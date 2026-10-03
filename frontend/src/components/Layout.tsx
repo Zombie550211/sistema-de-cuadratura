@@ -8,11 +8,11 @@ import { IconCalendar, IconChevronDown, IconClock, IconHome, IconLink, IconLogou
 import { LiveClock } from "./LiveClock";
 
 const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }[] = [
-  { to: "/", label: "Inicio", icon: IconHome, roles: ["admin", "rrhh", "supervisor"] },
-  { to: "/marcaciones", label: "Marcaciones", icon: IconClock, roles: ["admin", "rrhh", "supervisor"] },
+  { to: "/", label: "Inicio", icon: IconHome, roles: ["admin", "rrhh"] },
+  { to: "/marcaciones", label: "Marcaciones", icon: IconClock, roles: ["admin", "rrhh"] },
   { to: "/importar", label: "Importar reloj", icon: IconUpload, roles: ["admin", "rrhh"] },
-  { to: "/horarios", label: "Horarios", icon: IconCalendar, roles: ["admin", "rrhh", "supervisor"] },
-  { to: "/empleados", label: "Empleados", icon: IconUsers, roles: ["admin", "rrhh", "supervisor"] },
+  { to: "/horarios", label: "Horarios", icon: IconCalendar, roles: ["admin", "rrhh"] },
+  { to: "/empleados", label: "Empleados", icon: IconUsers, roles: ["admin", "rrhh"] },
   { to: "/integraciones", label: "Integración CRM", icon: IconLink, roles: ["admin", "rrhh"] },
   { to: "/usuarios", label: "Usuarios", icon: IconShield, roles: ["admin"] },
 ];

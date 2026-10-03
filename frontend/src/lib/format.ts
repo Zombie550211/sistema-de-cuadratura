@@ -73,7 +73,7 @@ export const hhmm = (t: string) => t.slice(0, 5);
 export const ROLE_LABEL: Record<string, string> = {
   admin: "Administrador",
   rrhh: "Recursos Humanos",
-  supervisor: "Supervisor",
+  supervisor: "Supervisor (sin acceso)",
   empleado: "Empleado",
 };
 
