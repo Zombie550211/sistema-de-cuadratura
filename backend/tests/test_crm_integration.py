@@ -146,7 +146,7 @@ def test_crm_does_not_change_employee_data(crm):
     _send(client, headers, [_agent(first_name="EDWARD", last_name="RAMIREZ", hire_date="2026-09-16", badge_number="99")])
     after = client.get(f"/api/employees/{emp['id']}").json()
     assert (after["first_name"], after["last_name"], after["hire_date"], after["badge_number"]) == (
-        "Edward Manuel", "Ramirez Calderon", "2025-01-06", "83")
+        "EDWARD MANUEL", "RAMIREZ CALDERON", "2025-01-06", "83")
     assert after["crm_agent_id"] == "A-100"
 
 

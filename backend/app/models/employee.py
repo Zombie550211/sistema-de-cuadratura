@@ -152,6 +152,11 @@ class Employee(TimestampMixin, Base):
             cls.first_name,
         )
 
+    @validates("first_name", "last_name")
+    def _upper_name(self, _key, name: str) -> str:
+        # RRHH maneja los nombres en mayúsculas, vengan del CRM, de la nómina o de la pantalla.
+        return " ".join((name or "").split()).upper()
+
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}"

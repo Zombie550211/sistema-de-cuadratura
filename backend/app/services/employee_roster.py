@@ -80,7 +80,7 @@ def fix_case(text: str) -> str:
 
 def split_name(full: str) -> tuple[str, str]:
     """Nombres y apellidos de un nombre completo salvadoreño: los dos últimos apellidos
-    (con sus partículas) son el apellido; el resto, los nombres."""
+    (con sus partículas) son el apellido; el resto, los nombres. En mayúsculas, como en RRHH."""
     words = full.split()
     if len(words) < 2:
         raise ValueError("El nombre debe traer al menos un nombre y un apellido")
@@ -93,7 +93,7 @@ def split_name(full: str) -> tuple[str, str]:
             i -= 1
     if len(words) >= 4 and i < 2:
         i = 2
-    return _title(" ".join(words[:i])), _title(" ".join(words[i:]))
+    return " ".join(words[:i]).upper(), " ".join(words[i:]).upper()
 
 
 def _code(text: str) -> str:

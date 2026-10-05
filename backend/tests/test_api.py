@@ -88,7 +88,7 @@ def test_assigning_badge_links_existing_punches(login):
         params={"date_from": "2026-09-25", "date_to": "2026-09-25", "employee_id": emp["id"]},
     ).json()
     assert punches["total"] == 4
-    assert {p["employee"]["full_name"] for p in punches["items"]} == {"Ana López"}
+    assert {p["employee"]["full_name"] for p in punches["items"]} == {"ANA LÓPEZ"}
 
     no_taps = client.get(
         "/api/attendance/punches",

@@ -8,13 +8,13 @@ from app.services.employee_roster import parse_roster, split_name
 @pytest.mark.parametrize(
     "full, first, last",
     [
-        ("IRANIA CECILIA SERRANO MEJIA", "Irania Cecilia", "Serrano Mejia"),
-        ("MIGUEL EDUARDO NUÑEZ PEREZ", "Miguel Eduardo", "Nuñez Perez"),
-        ("DANIEL ANTHONY DEL CID ORELLANA", "Daniel Anthony", "Del Cid Orellana"),
-        ("KARLA GUADALUPE MEJIA DE MELENDEZ", "Karla Guadalupe", "Mejia de Melendez"),
-        ("EMANUEL DE JESUS VELASQUEZ HERNANDEZ", "Emanuel de Jesus", "Velasquez Hernandez"),
-        ("AMANDA JERKENIA ARAGON SANCHEZ ", "Amanda Jerkenia", "Aragon Sanchez"),
-        ("ANA PEREZ", "Ana", "Perez"),
+        ("IRANIA CECILIA SERRANO MEJIA", "IRANIA CECILIA", "SERRANO MEJIA"),
+        ("MIGUEL EDUARDO NUÑEZ PEREZ", "MIGUEL EDUARDO", "NUÑEZ PEREZ"),
+        ("DANIEL ANTHONY DEL CID ORELLANA", "DANIEL ANTHONY", "DEL CID ORELLANA"),
+        ("KARLA GUADALUPE MEJIA DE MELENDEZ", "KARLA GUADALUPE", "MEJIA DE MELENDEZ"),
+        ("EMANUEL DE JESUS VELASQUEZ HERNANDEZ", "EMANUEL DE JESUS", "VELASQUEZ HERNANDEZ"),
+        ("AMANDA JERKENIA ARAGON SANCHEZ ", "AMANDA JERKENIA", "ARAGON SANCHEZ"),
+        ("ANA PEREZ", "ANA", "PEREZ"),
     ],
 )
 def test_split_name(full, first, last):
@@ -51,7 +51,7 @@ def test_import_preview_then_apply_is_idempotent(login):
     applied = client.post("/api/employees/import", json={"text": ROSTER, "dry_run": False}).json()
     assert applied["applied"] is True
     emp = client.get("/api/employees", params={"q": "Pleitez"}).json()["items"][0]
-    assert (emp["code"], emp["first_name"], emp["last_name"], emp["hire_date"]) == ("28 CN", "Bryan Stanley", "Segovia Pleitez", "2025-07-03")
+    assert (emp["code"], emp["first_name"], emp["last_name"], emp["hire_date"]) == ("28 CN", "BRYAN STANLEY", "SEGOVIA PLEITEZ", "2025-07-03")
 
     again = client.post("/api/employees/import", json={"text": ROSTER.replace("03/07/2025", "04/07/2025")}).json()
     assert (again["created"], again["updated"], again["unchanged"]) == (0, 1, 2)
@@ -121,8 +121,8 @@ def test_roster_links_employees_created_by_crm(login):
     items = client.get("/api/employees").json()["items"]
     assert len(items) == 3  # no se duplicó nadie
     miguel = next(e for e in items if e["crm_agent_id"] == "150")
-    assert (miguel["code"], miguel["full_name"], miguel["hire_date"]) == ("9 CN", "Miguel Eduardo Nuñez Perez", "2023-06-01")
-    assert {e["full_name"] for e in items if e["crm_agent_id"] in ("152", "178")} == {"Andrea Flores", "Andrea Serrano"}
+    assert (miguel["code"], miguel["full_name"], miguel["hire_date"]) == ("9 CN", "MIGUEL EDUARDO NUÑEZ PEREZ", "2023-06-01")
+    assert {e["full_name"] for e in items if e["crm_agent_id"] in ("152", "178")} == {"ANDREA FLORES", "ANDREA SERRANO"}
 
 
 LISTADO = (
@@ -136,8 +136,8 @@ def test_parse_listado_uses_the_fingerprint_without_na():
     rows, errors = parse_roster(LISTADO)
     assert errors == []
     assert [(r.code, r.badge, r.first_name, r.last_name, r.position, r.hire_date) for r in rows] == [
-        (None, "27", "Bryan Stanley", "Segovia Pleitez", "Agente de ventas", date(2025, 7, 3)),
-        (None, "18", "Ana Sofia", "Lopez Perez", "Agente de ventas", date(2026, 9, 10)),
+        (None, "27", "BRYAN STANLEY", "SEGOVIA PLEITEZ", "Agente de ventas", date(2025, 7, 3)),
+        (None, "18", "ANA SOFIA", "LOPEZ PEREZ", "Agente de ventas", date(2026, 9, 10)),
     ]
 
 
@@ -245,7 +245,7 @@ def test_payroll_codes_can_swap_between_people(login):
     r = client.post("/api/employees/import", json={"text": swapped, "dry_run": False}).json()
     assert r["applied"] is True
     codes = {e["full_name"]: e["code"] for e in client.get("/api/employees", params={"limit": 50}).json()["items"]}
-    assert codes["Cristian Antonio Nieto Rivera"] == "28 CN" and codes["Bryan Stanley Segovia Pleitez"] == "60 CN"
+    assert codes["CRISTIAN ANTONIO NIETO RIVERA"] == "28 CN" and codes["BRYAN STANLEY SEGOVIA PLEITEZ"] == "60 CN"
 
 
 @pytest.mark.parametrize(
