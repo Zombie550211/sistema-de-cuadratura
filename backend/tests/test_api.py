@@ -159,3 +159,20 @@ def test_dashboard_summary(login):
     r = client.get("/api/dashboard/summary")
     assert r.status_code == 200
     assert r.json()["employees_active"] == 0
+
+
+def test_rrhh_can_reschedule_a_shift(login):
+    client = login("rrhh")
+    emp = client.post("/api/employees", json={"code": "R-1", "first_name": "Rosa", "last_name": "Mena"}).json()
+    client.post("/api/schedules/assignments/bulk", json={"employee_ids": [emp["id"]], "date_from": "2026-10-05", "date_to": "2026-10-06",
+                                                         "weekdays": [0, 1], "start_time": "08:00", "end_time": "17:00"})
+    monday, tuesday = client.get("/api/schedules/assignments", params={"date_from": "2026-10-05", "date_to": "2026-10-06"}).json()
+
+    # solo cambiar las horas, mismo día: no deja día libre
+    r = client.put(f"/api/schedules/assignments/{monday['id']}", json={"work_date": "2026-10-05", "start_time": "13:00", "end_time": "21:00"})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/schedules/days-off", params={"date_from": "2026-10-05", "date_to": "2026-10-06"}).json() == []
+
+    # moverlo a un día que ya tiene turno se rechaza
+    r = client.put(f"/api/schedules/assignments/{monday['id']}", json={"work_date": "2026-10-06", "start_time": "08:00", "end_time": "17:00"})
+    assert r.status_code == 409

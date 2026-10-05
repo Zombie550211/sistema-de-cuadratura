@@ -201,6 +201,14 @@ export interface ShiftAssignment {
   source: "manual" | "crm";
 }
 
+/** Día libre fijado por RRHH (al reagendar o dar el día); el CRM no pone turno ese día. */
+export interface ShiftDayOff {
+  id: number;
+  employee_id: number;
+  work_date: string;
+  notes: string | null;
+}
+
 export interface WorkDay {
   date: string;
   shift: ShiftAssignment | null;

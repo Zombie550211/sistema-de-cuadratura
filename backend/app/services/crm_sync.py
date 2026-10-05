@@ -12,7 +12,8 @@ CRM solo manda horarios. Reglas:
 - El team sí lo manda el CRM ("MIGUEL NUÑEZ" → "Miguel Nuñez").
 - Dentro del periodo enviado, los horarios con origen 'crm' del agente se reemplazan por los del envío
   (una fecha sin turno o con rest_day=true queda libre).
-- Un horario cargado a mano por RRHH ('manual') nunca se pisa: se reporta como conflicto.
+- Un horario cargado a mano por RRHH ('manual') nunca se pisa, ni se pone turno en un día libre que
+  RRHH fijó (al reagendar o dar el día): se reporta como conflicto.
 - El CRM manda los agentes ordenados por equipo (supervisor primero): esa posición se guarda en
   crm_order para listarlos igual aquí.
 - Cada agente se aplica en su propio savepoint: un error en uno no bloquea a los demás.
@@ -24,7 +25,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import ApiClient, Department, Employee, IntegrationSync, ShiftAssignment
+from app.models import ApiClient, Department, Employee, IntegrationSync, ShiftAssignment, ShiftDayOff
 from app.schemas.integration import AgentResult, CrmAgent, CrmSchedulePayload, SyncResult
 from app.services import audit
 from app.services.attendance_import import relink_badge
@@ -129,6 +130,15 @@ def _apply_agent(
             )
         )
     }
+    days_off = set(
+        db.scalars(
+            select(ShiftDayOff.work_date).where(
+                ShiftDayOff.employee_id == employee.id,
+                ShiftDayOff.work_date >= payload.date_from,
+                ShiftDayOff.work_date <= payload.date_to,
+            )
+        )
+    )
     wanted = {s.date: s for s in agent.shifts if not s.rest_day}
     conflicts = []
 
@@ -147,7 +157,9 @@ def _apply_agent(
             template_id=None,
         )
         current = existing.get(day)
-        if current is None:
+        if day in days_off:
+            conflicts.append(day)
+        elif current is None:
             db.add(ShiftAssignment(employee_id=employee.id, work_date=day, **values))
             counters.created += 1
         elif current.source != "crm":
@@ -175,7 +187,7 @@ def _apply_agent(
         employee_id=employee.id,
         employee_created=False,
         message=(
-            "Estas fechas tienen un horario cargado manualmente por RRHH y no se modificaron"
+            "Estas fechas tienen un horario o un día libre cargado manualmente por RRHH y no se modificaron"
             if conflicts
             else None
         ),

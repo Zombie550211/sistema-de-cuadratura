@@ -12,6 +12,7 @@ import {
   type Page,
   type Punch,
   type ShiftAssignment,
+  type ShiftDayOff,
   type ShiftTemplate,
   type Sync,
 } from "../lib/api";
@@ -26,7 +27,7 @@ const MIN_COVERAGE = 4;
 /** Horas semanales a partir de las que se avisa (jornada ordinaria diurna en El Salvador). */
 const WEEK_LIMIT_HOURS = 44;
 
-type Pop = { employee: Employee; day: string; dayIndex: number; current?: ShiftAssignment; top: number; left: number };
+type Pop = { employee: Employee; day: string; dayIndex: number; current?: ShiftAssignment; dayOff?: ShiftDayOff; top: number; left: number };
 
 /** Horas de trabajo efectivo de un turno (sin el descanso). */
 const workHours = (a: ShiftAssignment) => (new Date(a.end_at).getTime() - new Date(a.start_at).getTime()) / 3_600_000 - a.break_minutes / 60;
@@ -67,6 +68,7 @@ export function Schedules() {
   const employees = useAsync(() => api.get<Page<Employee>>("/employees", { status: "activo", limit: 500 }), []);
   const templates = useAsync(() => api.get<ShiftTemplate[]>("/schedules/templates", { include_inactive: true }), []);
   const assignments = useAsync(() => api.get<ShiftAssignment[]>("/schedules/assignments", { date_from: days[0], date_to: days[6] }), [days]);
+  const daysOff = useAsync(() => api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: days[0], date_to: days[6] }), [days]);
   const punches = useAsync(
     () =>
       isFuture
@@ -87,6 +89,7 @@ export function Schedules() {
     assignments.data?.forEach((a) => map.set(`${a.employee_id}|${a.work_date}`, a));
     return map;
   }, [assignments.data]);
+  const offByKey = useMemo(() => new Map(daysOff.data?.map((d) => [`${d.employee_id}|${d.work_date}`, d])), [daysOff.data]);
   const templateById = useMemo(() => new Map(templates.data?.map((t) => [t.id, t])), [templates.data]);
   /** Turno base del horario: el asignado, o el que tiene las mismas horas (los del CRM no traen turno base). */
   const templateOf = (a: ShiftAssignment) =>
@@ -139,44 +142,79 @@ export function Schedules() {
 
   function openPop(ev: MouseEvent, e: Employee) {
     if (!canEdit) return;
-    const top = ev.clientY + 360 > window.innerHeight ? Math.max(8, ev.clientY - 360) : ev.clientY + 12;
+    const top = ev.clientY + 520 > window.innerHeight ? Math.max(8, ev.clientY - 520) : ev.clientY + 12;
     setError(null);
-    setPop({ employee: e, day, dayIndex, current: byKey.get(`${e.id}|${day}`), top, left: Math.min(ev.clientX, window.innerWidth - 320) });
+    setPop({
+      employee: e,
+      day,
+      dayIndex,
+      current: byKey.get(`${e.id}|${day}`),
+      dayOff: offByKey.get(`${e.id}|${day}`),
+      top,
+      left: Math.min(ev.clientX, window.innerWidth - 320),
+    });
   }
 
-  async function applyTemplate(t: ShiftTemplate, weekdays: number[]) {
-    if (!pop) return;
+  /** Corre una acción del popover y recarga la semana. */
+  async function popAction(run: () => Promise<unknown>) {
     setBusy(true);
     try {
-      await api.post("/schedules/assignments/bulk", {
+      await run();
+      setPop(null);
+      assignments.reload();
+      daysOff.reload();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Reagendar (otra fecha y/u horas) o, si el día no tiene turno, asignar uno con horas a mano. */
+  function saveCustom(f: ShiftForm) {
+    if (!pop) return;
+    const body = { start_time: f.start, end_time: f.end, break_minutes: f.breakMinutes };
+    return popAction(() =>
+      pop.current
+        ? api.put(`/schedules/assignments/${pop.current.id}`, { ...body, work_date: f.date, tolerance_minutes: pop.current.tolerance_minutes, notes: pop.current.notes })
+        : api.post("/schedules/assignments/bulk", {
+            ...body,
+            employee_ids: [pop.employee.id],
+            date_from: pop.day,
+            date_to: pop.day,
+            weekdays: [pop.dayIndex],
+            overwrite: true,
+          }),
+    );
+  }
+
+  function applyTemplate(t: ShiftTemplate, weekdays: number[]) {
+    if (!pop) return;
+    return popAction(() =>
+      api.post("/schedules/assignments/bulk", {
         employee_ids: [pop.employee.id],
         date_from: weekdays.length > 1 ? days[0] : pop.day,
         date_to: weekdays.length > 1 ? days[6] : pop.day,
         weekdays,
         template_id: t.id,
         overwrite: true,
-      });
-      setPop(null);
-      assignments.reload();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+      }),
+    );
   }
 
-  async function clearDay() {
+  function clearDay() {
     if (!pop?.current) return;
-    setBusy(true);
-    try {
-      await api.delete(`/schedules/assignments/${pop.current.id}`);
-      setPop(null);
-      assignments.reload();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+    return popAction(() => api.delete(`/schedules/assignments/${pop.current!.id}`));
+  }
+
+  function giveDayOff() {
+    if (!pop) return;
+    return popAction(() => api.post("/schedules/days-off", { employee_id: pop.employee.id, work_date: pop.day }));
+  }
+
+  function removeDayOff() {
+    if (!pop?.dayOff) return;
+    return popAction(() => api.delete(`/schedules/days-off/${pop.dayOff!.id}`));
   }
 
   const sync = lastSync.data?.items[0];
@@ -350,6 +388,10 @@ export function Schedules() {
                           >
                             {a ? (
                               <ShiftBar a={a} day={day} h0={h0} span={span} color={colorOf(a)} template={templateOf(a)} />
+                            ) : offByKey.has(`${e.id}|${day}`) ? (
+                              <span className="sch-empty" title={offByKey.get(`${e.id}|${day}`)?.notes ?? undefined}>
+                                Día libre (RRHH){canEdit ? " — clic para cambiar" : ""}
+                              </span>
                             ) : (
                               <span className="sch-empty">{canEdit ? "Sin turno — clic para asignar" : "Sin turno"}</span>
                             )}
@@ -361,7 +403,7 @@ export function Schedules() {
                                 return (
                                   <span
                                     key={d}
-                                    title={`${DOW[i]}: ${wa ? `${fmtTime(wa.start_at)}–${fmtTime(wa.end_at)}` : "Sin turno"}`}
+                                    title={`${DOW[i]}: ${wa ? `${fmtTime(wa.start_at)}–${fmtTime(wa.end_at)}` : offByKey.has(`${e.id}|${d}`) ? "Día libre (RRHH)" : "Sin turno"}`}
                                     className={`${wa ? "" : "none"}${i === dayIndex ? " sel" : ""}`}
                                     style={wa ? { background: colorOf(wa) } : undefined}
                                   />
@@ -404,8 +446,23 @@ export function Schedules() {
               </button>
             ))}
             {activeTemplates.length === 0 && <div className="caption sch-pop-title">Cree un turno base para asignarlo con un clic.</div>}
+            <ShiftEditor
+              key={`${pop.employee.id}|${pop.day}`}
+              current={pop.current}
+              day={pop.day}
+              busy={busy}
+              onSave={saveCustom}
+            />
             {pop.current?.source === "crm" && (
-              <div className="caption sch-pop-note">Este turno vino del CRM. Si lo cambia aquí, el CRM ya no lo sobrescribe; si lo quita, el próximo envío del CRM lo vuelve a poner.</div>
+              <div className="caption sch-pop-note">
+                Este turno vino del CRM. Si lo cambia o reagenda aquí, el CRM ya no lo sobrescribe. "Quitar turno" deja que el próximo envío del CRM lo vuelva a
+                poner; "Dar día libre" no.
+              </div>
+            )}
+            {pop.dayOff && (
+              <div className="caption sch-pop-note">
+                Día libre fijado por RRHH{pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. El CRM no pone turno este día. Asignar un turno lo quita.
+              </div>
             )}
             <div className="sch-pop-foot">
               {popTemplate && (
@@ -416,6 +473,16 @@ export function Schedules() {
               {pop.current && (
                 <button className="btn ghost sm" disabled={busy} onClick={clearDay}>
                   Quitar turno del día
+                </button>
+              )}
+              {!pop.dayOff && (
+                <button className="btn ghost sm" disabled={busy} onClick={giveDayOff}>
+                  Dar día libre
+                </button>
+              )}
+              {pop.dayOff && (
+                <button className="btn ghost sm" disabled={busy} onClick={removeDayOff}>
+                  Quitar día libre
                 </button>
               )}
             </div>
@@ -440,6 +507,53 @@ export function Schedules() {
         <TemplatesModal templates={templates.data ?? []} canEdit={canEdit} onClose={() => setTemplatesOpen(false)} onSaved={templates.reload} />
       )}
     </div>
+  );
+}
+
+type ShiftForm = { date: string; start: string; end: string; breakMinutes: number };
+
+/** Horas a mano para el día; con turno, también la fecha para reagendarlo. */
+function ShiftEditor({ current, day, busy, onSave }: { current?: ShiftAssignment; day: string; busy: boolean; onSave: (f: ShiftForm) => void }) {
+  const [f, setF] = useState<ShiftForm>(() => ({
+    date: day,
+    start: current ? fmtTime(current.start_at) : "08:00",
+    end: current ? fmtTime(current.end_at) : "17:00",
+    breakMinutes: current?.break_minutes ?? 60,
+  }));
+  const set = (patch: Partial<ShiftForm>) => setF((x) => ({ ...x, ...patch }));
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    onSave(f);
+  };
+  const moving = !!current && f.date !== day;
+  return (
+    <form className="sch-pop-form" onSubmit={submit}>
+      <div className="caption">{current ? "Reagendar: otra fecha u otras horas" : "Horario personalizado"}</div>
+      {current && (
+        <label>
+          <span className="caption">Fecha</span>
+          <input className="input" type="date" required value={f.date} onChange={(e) => set({ date: e.target.value })} />
+        </label>
+      )}
+      <div className="sch-pop-times">
+        <label>
+          <span className="caption">Entrada</span>
+          <input className="input" type="time" required value={f.start} onChange={(e) => set({ start: e.target.value })} />
+        </label>
+        <label>
+          <span className="caption">Salida</span>
+          <input className="input" type="time" required value={f.end} onChange={(e) => set({ end: e.target.value })} />
+        </label>
+        <label>
+          <span className="caption">Desc. (min)</span>
+          <input className="input" type="number" min={0} max={480} required value={f.breakMinutes} onChange={(e) => set({ breakMinutes: Number(e.target.value) })} />
+        </label>
+      </div>
+      {moving && <div className="caption">El {fmtShort(day)} queda como día libre.</div>}
+      <button className="btn sm" disabled={busy || f.start === f.end}>
+        {moving ? `Mover al ${fmtShort(f.date)}` : current ? "Guardar horas" : "Asignar"}
+      </button>
+    </form>
   );
 }
 

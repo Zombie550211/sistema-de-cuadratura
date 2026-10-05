@@ -4,7 +4,7 @@ from app.models.base import Base
 from app.models.certificate import SalaryCertificate
 from app.models.integration import ApiClient, IntegrationSync
 from app.models.employee import AREAS, Department, Employee, EmployeeStatus, PayFrequency, area_for, user_code_base
-from app.models.schedule import ShiftAssignment, ShiftTemplate
+from app.models.schedule import ShiftAssignment, ShiftDayOff, ShiftTemplate
 from app.models.user import Role, User
 
 __all__ = [
@@ -25,6 +25,7 @@ __all__ = [
     "Punch",
     "Role",
     "ShiftAssignment",
+    "ShiftDayOff",
     "ShiftTemplate",
     "User",
 ]

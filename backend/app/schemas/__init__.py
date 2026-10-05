@@ -255,6 +255,37 @@ class ShiftAssignmentOut(ORM):
     source: str
 
 
+class ShiftUpdateIn(BaseModel):
+    """Reagendar un turno: otra fecha y/o otras horas. Si cambia la fecha, el día que deja
+    queda como día libre de RRHH (así el CRM no lo vuelve a poner)."""
+
+    work_date: date
+    start_time: time
+    end_time: time
+    break_minutes: int = Field(default=60, ge=0, le=480)
+    tolerance_minutes: int = Field(default=5, ge=0, le=120)
+    notes: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.start_time == self.end_time:
+            raise ValueError("La hora de inicio y fin no pueden ser iguales")
+        return self
+
+
+class ShiftDayOffIn(BaseModel):
+    employee_id: int
+    work_date: date
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class ShiftDayOffOut(ORM):
+    id: int
+    employee_id: int
+    work_date: date
+    notes: str | None
+
+
 class BulkAssignIn(BaseModel):
     """Asigna un turno a varios empleados en un rango de fechas y días de la semana."""
 

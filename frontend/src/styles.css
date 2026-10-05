@@ -532,6 +532,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sch-pop-item:disabled { cursor: default; }
 .sch-pop-note { padding: 8px; border-radius: var(--r-sm); background: var(--warn-soft); color: var(--warn); }
 .sch-pop-foot { display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 4px 4px; }
+.sch-pop-form { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: 1px solid var(--line); margin-top: 4px; }
+.sch-pop-form label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sch-pop-form .input { width: 100%; }
+.sch-pop-times { display: grid; grid-template-columns: 1fr 1fr 0.8fr; gap: 6px; }
 @media (max-width: 860px) {
   .sch-title { font-size: 32px; }
   .sch-days { overflow-x: auto; }

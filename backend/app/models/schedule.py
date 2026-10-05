@@ -61,3 +61,17 @@ class ShiftAssignment(TimestampMixin, Base):
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     template = relationship(ShiftTemplate, lazy="joined")
+
+
+class ShiftDayOff(TimestampMixin, Base):
+    """Día libre que RRHH fijó a mano (al reagendar un turno o al quitarlo). El CRM no pone
+    turno en un día libre de RRHH, igual que no pisa un horario manual."""
+
+    __tablename__ = "shift_days_off"
+    __table_args__ = (UniqueConstraint("employee_id", "work_date", name="uq_shift_days_off_employee_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    work_date: Mapped[date] = mapped_column(Date, index=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))

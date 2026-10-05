@@ -289,3 +289,54 @@ def test_employees_listed_by_team_like_crm(crm):
 
     teams = [d["name"] for d in client.get("/api/departments").json()]
     assert teams == ["Team Miguel Nuñez", "Team Rosa Vides", "Team Lineas Carla"]
+
+
+def _local(iso):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.fromisoformat(iso).astimezone(ZoneInfo("America/El_Salvador")).strftime("%Y-%m-%d %H:%M")
+
+
+def test_rescheduled_shift_is_kept_when_crm_resends(crm):
+    client, headers = crm
+    _hire(client)
+    _send(client, headers, [_agent()])
+    monday = client.get("/api/schedules/assignments", params={"date_from": "2026-10-05", "date_to": "2026-10-05"}).json()[0]
+
+    # RRHH lo pasa del lunes al miércoles (que el CRM mandó libre), de 09:00 a 18:00
+    r = client.put(f"/api/schedules/assignments/{monday['id']}",
+                   json={"work_date": "2026-10-07", "start_time": "09:00", "end_time": "18:00", "break_minutes": 60})
+    assert r.status_code == 200, r.text
+    moved = r.json()
+    assert (moved["work_date"], moved["source"], _local(moved["start_at"])) == ("2026-10-07", "manual", "2026-10-07 09:00")
+    days_off = client.get("/api/schedules/days-off", params=WEEK).json()
+    assert [d["work_date"] for d in days_off] == ["2026-10-05"]
+
+    # el CRM reenvía la semana igual: no vuelve a poner el lunes ni toca el miércoles
+    body = _send(client, headers, [_agent()]).json()
+    assert body["agents"][0]["conflict_dates"] == ["2026-10-05"]
+    shifts = client.get("/api/schedules/assignments", params=WEEK).json()
+    assert [(s["work_date"], s["source"]) for s in shifts] == [("2026-10-06", "crm"), ("2026-10-07", "manual")]
+
+    # quitar el día libre deja que el CRM vuelva a llenar el lunes
+    assert client.delete(f"/api/schedules/days-off/{days_off[0]['id']}").status_code == 204
+    _send(client, headers, [_agent()])
+    shifts = client.get("/api/schedules/assignments", params=WEEK).json()
+    assert [s["work_date"] for s in shifts] == ["2026-10-05", "2026-10-06", "2026-10-07"]
+
+
+def test_day_off_removes_crm_shift_for_good(crm):
+    client, headers = crm
+    _hire(client)
+    emp_id = _send(client, headers, [_agent()]).json()["agents"][0]["employee_id"]
+    r = client.post("/api/schedules/days-off", json={"employee_id": emp_id, "work_date": "2026-10-06", "notes": "Permiso"})
+    assert r.status_code == 201, r.text
+    _send(client, headers, [_agent()])
+    shifts = client.get("/api/schedules/assignments", params=WEEK).json()
+    assert [s["work_date"] for s in shifts] == ["2026-10-05"]
+
+    # asignar un turno a mano ese día quita el día libre
+    client.post("/api/schedules/assignments/bulk", json={"employee_ids": [emp_id], "date_from": "2026-10-06", "date_to": "2026-10-06",
+                                                         "weekdays": [1], "start_time": "08:00", "end_time": "12:00"})
+    assert client.get("/api/schedules/days-off", params=WEEK).json() == []
