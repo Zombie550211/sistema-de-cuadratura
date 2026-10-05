@@ -626,11 +626,13 @@ function TemplatesModal({ templates, canEdit, onClose, onSaved }: { templates: S
   );
 }
 
-function AssignModal({
+/** Asignar un turno a varios empleados en un rango de fechas. Se usa en Horarios y en Empleados. */
+export function AssignModal({
   employees,
   templates,
   defaultFrom,
   defaultTo,
+  initialSelected = [],
   onClose,
   onDone,
 }: {
@@ -638,10 +640,11 @@ function AssignModal({
   templates: ShiftTemplate[];
   defaultFrom: string;
   defaultTo: string;
+  initialSelected?: number[];
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(() => new Set(initialSelected));
   const [search, setSearch] = useState("");
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);

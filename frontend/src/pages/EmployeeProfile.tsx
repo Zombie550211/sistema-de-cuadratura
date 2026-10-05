@@ -4,11 +4,12 @@ import { Link, useParams } from "react-router-dom";
 import { IconChevronLeft, IconChevronRight, IconFile } from "../components/Icons";
 import { type IssuedCertificate, printCertificate, SalaryCertificate, sanitizeCertificateHtml, TEMPLATES } from "../components/SalaryCertificate";
 import { useNow } from "../components/LiveClock";
-import { api, AREAS, areaPath, DOCS, type Department, type Employee, type EmployeeSchedule, type WorkDay } from "../lib/api";
+import { api, AREAS, areaPath, DOCS, type Department, type Employee, type EmployeeSchedule, type ShiftTemplate, type WorkDay } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { addDays, fmtBirthday, fmtDate, fmtDateTime, fmtMoney, fmtShortDay, fmtTime, fmtTimeSec, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 import { EmployeeForm } from "./EmployeeForm";
+import { AssignModal } from "./Schedules";
 
 /** Ruta /empleados/:id (personal de RRHH). */
 export function EmployeeProfilePage() {
@@ -24,6 +25,7 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
   const [start, setStart] = useState(() => weekStart(today()));
   const [editing, setEditing] = useState(false);
   const [certificate, setCertificate] = useState(false);
+  const [assigning, setAssigning] = useState(false);
   const end = addDays(start, 6);
 
   const employee = useAsync(() => api.get<Employee>(`/employees/${employeeId}`), [employeeId]);
@@ -36,6 +38,7 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
     [employeeId, canEdit],
   );
   const departments = useAsync(() => (canEdit ? api.get<Department[]>("/departments") : Promise.resolve([])), [canEdit]);
+  const templates = useAsync(() => (canEdit ? api.get<ShiftTemplate[]>("/schedules/templates") : Promise.resolve([])), [canEdit]);
 
   const e = employee.data;
   const days = schedule.data?.days ?? [];
@@ -86,6 +89,9 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
           </div>
           {canEdit && (
             <div className="row">
+              <button className="btn ghost" onClick={() => setAssigning(true)} disabled={!templates.data || e.status !== "activo"}>
+                Asignar horario
+              </button>
               <button className="btn ghost" onClick={() => setCertificate(true)}>
                 <IconFile /> Constancia salarial
               </button>
@@ -180,6 +186,20 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
         </div>
       </div>
 
+      {assigning && (
+        <AssignModal
+          employees={[e]}
+          templates={templates.data ?? []}
+          defaultFrom={start}
+          defaultTo={end}
+          initialSelected={[e.id]}
+          onClose={() => setAssigning(false)}
+          onDone={() => {
+            setAssigning(false);
+            schedule.reload();
+          }}
+        />
+      )}
       {certificate && <SalaryCertificate employee={e} onClose={() => setCertificate(false)} onIssued={certificates.reload} />}
       {editing && (
         <EmployeeForm

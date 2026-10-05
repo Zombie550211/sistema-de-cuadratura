@@ -4,13 +4,12 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { IconLink, IconPlus } from "../components/Icons";
 import { RosterImport } from "../components/RosterImport";
 import { SectionBanner, TeamHeader, useCollapsedTeams } from "../components/TeamGroups";
-import { api, AREAS, DOCS, groupByTeam, type Area, type Department, type Employee, type EmployeeInput, type Page, type UnmappedBadge } from "../lib/api";
+import { api, AREAS, DOCS, groupByTeam, type Area, type Department, type Employee, type EmployeeInput, type Page, type ShiftTemplate, type UnmappedBadge } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { fmtDate, fmtDateTime, fmtMoney, seniority } from "../lib/format";
+import { addDays, fmtDate, fmtDateTime, fmtMoney, seniority, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 import { EmployeeForm } from "./EmployeeForm";
-
-const COLS = 10;
+import { AssignModal } from "./Schedules";
 
 type Editing = { employee: Employee | null; initial?: Partial<EmployeeInput> } | null;
 
@@ -28,6 +27,9 @@ export function Employees({ area }: { area: Area }) {
   const [importing, setImporting] = useState(false);
   const showUnmapped = params.get("vincular") === "1";
   const teams = useCollapsedTeams(`empleados.${area}.teams-plegados`);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [assigning, setAssigning] = useState(false);
+  const COLS = canEdit ? 11 : 10;
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(q), 250);
@@ -37,6 +39,16 @@ export function Employees({ area }: { area: Area }) {
   const list = useAsync(() => api.get<Page<Employee>>("/employees", { q: debounced, status, area, limit: 500 }), [debounced, status, area]);
   const departments = useAsync(() => api.get<Department[]>("/departments"), []);
   const unmapped = useAsync(() => api.get<UnmappedBadge[]>("/attendance/unmapped-badges"), []);
+  const templates = useAsync(() => (canEdit ? api.get<ShiftTemplate[]>("/schedules/templates") : Promise.resolve([])), [canEdit]);
+  const items = list.data?.items ?? [];
+  const toggle = (id: number) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const allChecked = items.length > 0 && items.every((e) => selected.has(e.id));
 
   function saved() {
     setEditing(null);
@@ -56,6 +68,11 @@ export function Employees({ area }: { area: Area }) {
           {!!unmapped.data?.length && (
             <button className="btn ghost" onClick={() => setParams(showUnmapped ? {} : { vincular: "1" })}>
               <IconLink /> {unmapped.data.length} IDs sin vincular
+            </button>
+          )}
+          {canEdit && (
+            <button className="btn ghost" onClick={() => setAssigning(true)} disabled={!items.length || !templates.data}>
+              Asignar horario{selected.size ? ` (${selected.size})` : ""}
             </button>
           )}
           {canEdit && (
@@ -128,6 +145,16 @@ export function Employees({ area }: { area: Area }) {
           <table className="table dense">
             <thead>
               <tr>
+                {canEdit && (
+                  <th style={{ width: 32 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="Seleccionar todos para asignar horario"
+                      checked={allChecked}
+                      onChange={() => setSelected(allChecked ? new Set() : new Set(items.map((e) => e.id)))}
+                    />
+                  </th>
+                )}
                 <th>Empleado</th>
                 <th>Cargo</th>
                 <th className="num">Sueldo</th>
@@ -157,6 +184,11 @@ export function Employees({ area }: { area: Area }) {
                 </tr>
                 {teams.isOpen(g.key) && g.items.map((e) => (
                 <tr key={e.id} className="clickable" onClick={() => navigate(`/empleados/${e.id}`)}>
+                  {canEdit && (
+                    <td onClick={(ev) => ev.stopPropagation()}>
+                      <input type="checkbox" aria-label={`Seleccionar a ${e.full_name}`} checked={selected.has(e.id)} onChange={() => toggle(e.id)} />
+                    </td>
+                  )}
                   <td>
                     <div className="nowrap">{e.full_name}</div>
                     <div className="caption">
@@ -211,6 +243,20 @@ export function Employees({ area }: { area: Area }) {
         </div>
       </div>
 
+      {assigning && (
+        <AssignModal
+          employees={items.filter((e) => e.status === "activo")}
+          templates={templates.data ?? []}
+          defaultFrom={weekStart(today())}
+          defaultTo={addDays(weekStart(today()), 6)}
+          initialSelected={[...selected]}
+          onClose={() => setAssigning(false)}
+          onDone={() => {
+            setAssigning(false);
+            setSelected(new Set());
+          }}
+        />
+      )}
       {importing && (
         <RosterImport
           onClose={() => setImporting(false)}
