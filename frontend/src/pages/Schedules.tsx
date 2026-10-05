@@ -104,7 +104,8 @@ export function Schedules() {
     return map;
   }, [punches.data]);
 
-  const allGroups = useMemo(() => groupByTeam(employees.data?.items ?? []), [employees.data]);
+  // Solo agentes con team: el personal sin team (administración, IT, etc.) se asigna desde Empleados.
+  const allGroups = useMemo(() => groupByTeam((employees.data?.items ?? []).filter((e) => e.department)), [employees.data]);
   const q = query.trim().toLowerCase();
   const groups = allGroups
     .filter((g) => team === "all" || g.key === team)
