@@ -273,9 +273,13 @@ class ShiftUpdateIn(BaseModel):
         return self
 
 
+DayOffKind = Literal["libre", "vacacion", "compensatorio"]
+
+
 class ShiftDayOffIn(BaseModel):
     employee_id: int
     work_date: date
+    kind: DayOffKind = "libre"
     notes: str | None = Field(default=None, max_length=500)
 
 
@@ -283,7 +287,38 @@ class ShiftDayOffOut(ORM):
     id: int
     employee_id: int
     work_date: date
+    kind: DayOffKind
     notes: str | None
+
+
+class LeaveBulkIn(BaseModel):
+    """Días de vacación o compensatorios para varios empleados en un rango de fechas."""
+
+    employee_ids: list[int] = Field(min_length=1, max_length=500)
+    date_from: date
+    date_to: date
+    weekdays: list[int] = Field(default=[0, 1, 2, 3, 4, 5], description="0=lunes … 6=domingo")
+    kind: Literal["vacacion", "compensatorio"]
+    notes: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.date_to < self.date_from or (self.date_to - self.date_from).days > 93:
+            raise ValueError("Rango de fechas inválido (máx. 3 meses)")
+        return self
+
+
+class LeaveBulkOut(BaseModel):
+    days: int
+    shifts_removed: int
+
+
+class LeaveTotals(BaseModel):
+    """Días de vacación y compensatorios del empleado en el año."""
+
+    year: int
+    vacacion: int
+    compensatorio: int
 
 
 class BulkAssignIn(BaseModel):
@@ -330,6 +365,31 @@ class DeviceOut(ORM):
     serial_number: str
     name: str
     location: str | None
+    fingerprint_key: str | None
+
+
+class LocalOut(DeviceOut):
+    punches: int
+
+
+class LocalesOut(BaseModel):
+    devices: list[LocalOut]
+    # Locales que conoce la planilla (columnas HUELLA), para elegir al importar un Excel.
+    known: list[str]
+
+
+class PunchEdit(BaseModel):
+    punched_at: datetime
+
+
+class BadgeLinkIn(BaseModel):
+    device_id: int
+    badge: str = Field(min_length=1, max_length=32)
+    employee_id: int
+
+
+class ExcelTextOut(BaseModel):
+    text: str
 
 
 class ImportBatchOut(ORM):
@@ -352,6 +412,8 @@ class PunchOut(ORM):
     id: int
     badge: str
     punched_at: datetime
+    original_punched_at: datetime | None
+    device_id: int
     verify_mode: int
     work_code: int
     is_double_tap: bool
@@ -368,6 +430,8 @@ class WorkDayOut(ORM):
     date: date
     shift: ShiftAssignmentOut | None
     punches: list[PunchLite]
+    check_in: PunchLite | None
+    day_off: ShiftDayOffOut | None
 
 
 class EmployeeScheduleOut(BaseModel):
@@ -376,6 +440,7 @@ class EmployeeScheduleOut(BaseModel):
     date_to: date
     last_crm_sync_at: datetime | None
     days: list[WorkDayOut]
+    leave: LeaveTotals
 
 
 class UnmappedBadge(BaseModel):

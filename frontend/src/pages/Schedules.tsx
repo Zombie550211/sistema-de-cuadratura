@@ -6,6 +6,7 @@ import { Modal } from "../components/Modal";
 import { useCollapsedTeams } from "../components/TeamGroups";
 import {
   api,
+  DAY_OFF_LABEL,
   groupByTeam,
   SECTION_LABEL,
   type Employee,
@@ -391,7 +392,7 @@ export function Schedules() {
                               <ShiftBar a={a} day={day} h0={h0} span={span} color={colorOf(a)} template={templateOf(a)} />
                             ) : offByKey.has(`${e.id}|${day}`) ? (
                               <span className="sch-empty" title={offByKey.get(`${e.id}|${day}`)?.notes ?? undefined}>
-                                Día libre (RRHH){canEdit ? " — clic para cambiar" : ""}
+                                {DAY_OFF_LABEL[offByKey.get(`${e.id}|${day}`)!.kind]} (RRHH){canEdit ? " — clic para cambiar" : ""}
                               </span>
                             ) : (
                               <span className="sch-empty">{canEdit ? "Sin turno — clic para asignar" : "Sin turno"}</span>
@@ -462,7 +463,7 @@ export function Schedules() {
             )}
             {pop.dayOff && (
               <div className="caption sch-pop-note">
-                Día libre fijado por RRHH{pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. El CRM no pone turno este día. Asignar un turno lo quita.
+                {DAY_OFF_LABEL[pop.dayOff.kind]} fijado por RRHH{pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. El CRM no pone turno este día. Asignar un turno lo quita.
               </div>
             )}
             <div className="sch-pop-foot">
@@ -483,7 +484,7 @@ export function Schedules() {
               )}
               {pop.dayOff && (
                 <button className="btn ghost sm" disabled={busy} onClick={removeDayOff}>
-                  Quitar día libre
+                  Quitar {DAY_OFF_LABEL[pop.dayOff.kind].toLowerCase()}
                 </button>
               )}
             </div>
@@ -634,6 +635,7 @@ export function AssignModal({
   defaultFrom,
   defaultTo,
   initialSelected = [],
+  initialMode = "turno",
   onClose,
   onDone,
 }: {
@@ -642,6 +644,7 @@ export function AssignModal({
   defaultFrom: string;
   defaultTo: string;
   initialSelected?: number[];
+  initialMode?: "turno" | "vacacion" | "compensatorio";
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -655,6 +658,8 @@ export function AssignModal({
   const [endTime, setEndTime] = useState("17:00");
   const [breakMin, setBreakMin] = useState(60);
   const [overwrite, setOverwrite] = useState(false);
+  const [mode, setMode] = useState(initialMode);
+  const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -674,6 +679,18 @@ export function AssignModal({
     setError(null);
     const custom = templateId === "custom";
     try {
+      if (mode !== "turno") {
+        await api.post("/schedules/days-off/bulk", {
+          employee_ids: [...selected],
+          date_from: from,
+          date_to: to,
+          weekdays,
+          kind: mode,
+          notes: notes.trim() || null,
+        });
+        onDone();
+        return;
+      }
       const r = await api.post<{ created: number; updated: number; skipped: number }>("/schedules/assignments/bulk", {
         employee_ids: [...selected],
         date_from: from,
@@ -700,6 +717,24 @@ export function AssignModal({
   return (
     <Modal title="Asignar horario" onClose={onClose}>
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="chips" role="radiogroup" aria-label="Qué asignar">
+          {(
+            [
+              ["turno", "Turno"],
+              ["vacacion", "Vacación"],
+              ["compensatorio", "Día compensatorio"],
+            ] as const
+          ).map(([value, label]) => (
+            <button key={value} type="button" role="radio" aria-checked={mode === value} className={`btn sm${mode === value ? "" : " ghost"}`} onClick={() => setMode(value)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {mode !== "turno" && (
+          <div className="caption">
+            Los días elegidos quedan como {mode === "vacacion" ? "vacación" : "día compensatorio"}: se quita el turno que hubiera y el CRM ya no lo vuelve a poner.
+          </div>
+        )}
         {error && <div className="alert">{error}</div>}
         {result && <div className="alert warn">{result}</div>}
         <div className="field">
@@ -746,6 +781,13 @@ export function AssignModal({
               ))}
             </div>
           </div>
+          {mode !== "turno" && (
+            <label className="field full">
+              <span>Nota (opcional)</span>
+              <input className="input" value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} placeholder="Ej. vacaciones anuales, compensa el sábado 3" />
+            </label>
+          )}
+          {mode === "turno" && (
           <label className="field full">
             <span>Turno</span>
             <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
@@ -757,7 +799,8 @@ export function AssignModal({
               <option value="custom">Horario personalizado…</option>
             </select>
           </label>
-          {templateId === "custom" && (
+          )}
+          {mode === "turno" && templateId === "custom" && (
             <>
               <label className="field">
                 <span>Entrada</span>
@@ -774,15 +817,17 @@ export function AssignModal({
             </>
           )}
         </div>
-        <label className="check">
-          <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> Reemplazar horarios existentes en esas fechas
-        </label>
+        {mode === "turno" && (
+          <label className="check">
+            <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> Reemplazar horarios existentes en esas fechas
+          </label>
+        )}
         <div className="modal-foot">
           <button type="button" className="btn ghost" onClick={onClose}>
             Cancelar
           </button>
           <button className="btn" disabled={busy || !selected.size || !weekdays.length}>
-            {busy ? "Asignando…" : "Asignar"}
+            {busy ? "Asignando…" : mode === "turno" ? "Asignar" : mode === "vacacion" ? "Asignar vacación" : "Asignar compensatorio"}
           </button>
         </div>
       </form>

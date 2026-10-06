@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
-import { AREAS, type Role } from "../lib/api";
+import { AREAS, UNMAPPED_SLUG, type Role } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ROLE_LABEL } from "../lib/format";
 import { IconCalendar, IconChevronDown, IconClock, IconHome, IconLink, IconLogout, IconShield, IconUpload, IconUsers } from "./Icons";
@@ -17,22 +17,23 @@ const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }
   { to: "/usuarios", label: "Usuarios", icon: IconShield, roles: ["admin"] },
 ];
 
-/** Empleados se despliega en sus 4 secciones; queda abierto mientras se navega dentro de ellas. */
-function EmployeesNav() {
-  const inside = useLocation().pathname.startsWith("/empleados");
+/** Empleados y Marcaciones se despliegan en sus secciones; quedan abiertos mientras se navega
+ *  dentro de ellas. */
+function SectionNav({ base, label, icon: Icon, extra = [] }: { base: string; label: string; icon: typeof IconHome; extra?: { slug: string; label: string }[] }) {
+  const inside = useLocation().pathname.startsWith(base);
   const [open, setOpen] = useState(inside);
   const shown = open || inside;
   return (
     <div className="nav-group">
       <button type="button" className={`nav-parent${inside ? " active" : ""}`} aria-expanded={shown} onClick={() => setOpen(!shown)}>
-        <IconUsers />
-        Empleados
+        <Icon />
+        {label}
         <IconChevronDown className={`nav-caret${shown ? " open" : ""}`} />
       </button>
       {shown && (
         <div className="nav-sub">
-          {AREAS.map((a) => (
-            <NavLink key={a.slug} to={`/empleados/${a.slug}`}>
+          {[...AREAS, ...extra].map((a) => (
+            <NavLink key={a.slug} to={`${base}/${a.slug}`}>
               {a.label}
             </NavLink>
           ))}
@@ -64,7 +65,9 @@ export function Layout() {
         <nav className="nav">
           {LINKS.filter((l) => can(...l.roles)).map(({ to, label, icon: Icon }) =>
             to === "/empleados" ? (
-              <EmployeesNav key={to} />
+              <SectionNav key={to} base={to} label={label} icon={Icon} />
+            ) : to === "/marcaciones" ? (
+              <SectionNav key={to} base={to} label={label} icon={Icon} extra={[{ slug: UNMAPPED_SLUG, label: "Sin empleado" }]} />
             ) : (
               <NavLink key={to} to={to} end={to === "/"}>
                 <Icon />

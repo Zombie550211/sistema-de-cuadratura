@@ -229,6 +229,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
   animation: zePop 0.35s ease-out both;
 }
 .punch.double { border-style: dashed; border-color: var(--line-strong); color: var(--muted-2); text-decoration: line-through; }
+.punch.in::before { content: "ENTRADA"; margin-right: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--accent-bright); }
+.punch.middle { border-style: dashed; border-color: var(--line-strong); color: var(--muted-2); }
 .punch-list { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ---------- Zona de arrastre ---------- */
@@ -554,3 +556,38 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .cert-overlay { grid-template-columns: 1fr; grid-template-rows: auto 1fr; overflow: auto; }
   .cert-stage { padding: 16px; justify-content: flex-start; }
 }
+
+/* ---------- Menú ⋯ de cada fila ---------- */
+.row-menu-btn { display: inline-grid; place-items: center; }
+.row-menu-backdrop { position: fixed; inset: 0; z-index: 40; }
+.row-menu {
+  position: fixed; min-width: 180px; padding: 6px; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm);
+  box-shadow: var(--shadow-modal); animation: zeDrop 0.18s ease-out both;
+}
+.row-menu button {
+  text-align: left; padding: 8px 12px; border: 0; border-radius: var(--r-sm); background: none;
+  color: var(--text); font: inherit; font-size: 14px; cursor: pointer;
+}
+.row-menu button:hover { background: var(--bg); }
+.row-menu button.danger { color: var(--danger); }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.stack p { margin: 0; }
+
+/* ---------- Pestañas por local ---------- */
+.tabs { display: flex; gap: 4px; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.tabs button {
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border: 0; background: none;
+  font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.tabs .count { font-size: 12px; font-weight: 600; color: var(--muted-2); }
+.punch.edited { border-style: dotted; }
+/* La columna ⋯ queda fija a la derecha aunque la tabla tenga scroll horizontal. */
+.table .row-actions { position: sticky; right: 0; width: 48px; background: var(--surface); }
+.table tbody tr:hover .row-actions { background: var(--bg); }
+.stats.six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.stat-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+@media (max-width: 900px) { .stats.six { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

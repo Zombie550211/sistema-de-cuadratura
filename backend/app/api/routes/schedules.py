@@ -12,6 +12,8 @@ from app.schemas import (
     BulkAssignIn,
     BulkAssignOut,
     ShiftAssignmentOut,
+    LeaveBulkIn,
+    LeaveBulkOut,
     ShiftDayOffIn,
     ShiftDayOffOut,
     ShiftTemplateIn,
@@ -171,13 +173,15 @@ def bulk_assign(data: BulkAssignIn, db: DB, user: HR):
     return BulkAssignOut(created=created, updated=updated, skipped=skipped)
 
 
-def _day_off(db: DB, employee_id: int, day: date, user, notes: str | None = None) -> ShiftDayOff:
+def _day_off(db: DB, employee_id: int, day: date, user, notes: str | None = None, kind: str = "libre") -> ShiftDayOff:
     off = db.scalar(select(ShiftDayOff).where(ShiftDayOff.employee_id == employee_id, ShiftDayOff.work_date == day))
     if off is None:
-        off = ShiftDayOff(employee_id=employee_id, work_date=day, notes=notes, created_by_id=user.id)
+        off = ShiftDayOff(employee_id=employee_id, work_date=day, kind=kind, notes=notes, created_by_id=user.id)
         db.add(off)
-    elif notes is not None:
-        off.notes = notes
+    else:
+        off.kind = kind
+        if notes is not None:
+            off.notes = notes
     return off
 
 
@@ -248,7 +252,7 @@ def set_day_off(data: ShiftDayOffIn, db: DB, user: HR):
     )
     if removed is not None:
         db.delete(removed)
-    off = _day_off(db, data.employee_id, data.work_date, user, data.notes)
+    off = _day_off(db, data.employee_id, data.work_date, user, data.notes, data.kind)
     db.flush()
     audit.record(
         db,
@@ -259,11 +263,39 @@ def set_day_off(data: ShiftDayOffIn, db: DB, user: HR):
         {
             "empleado": data.employee_id,
             "fecha": data.work_date.isoformat(),
+            "tipo": data.kind,
             "turno_quitado": f"{removed.start_at.isoformat()} – {removed.end_at.isoformat()}" if removed else None,
         },
     )
     db.commit()
     return off
+
+
+@router.post("/days-off/bulk", response_model=LeaveBulkOut)
+def assign_leave(data: LeaveBulkIn, db: DB, user: HR):
+    """Vacación o compensatorio en un rango: quita el turno de esos días y el CRM ya no lo pone."""
+    employee_ids = set(data.employee_ids)
+    found = set(db.scalars(select(Employee.id).where(Employee.id.in_(employee_ids))).all())
+    if missing := employee_ids - found:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Empleados no encontrados: {sorted(missing)}")
+
+    dates = [
+        data.date_from + timedelta(days=i)
+        for i in range((data.date_to - data.date_from).days + 1)
+        if (data.date_from + timedelta(days=i)).weekday() in data.weekdays
+    ]
+    removed = db.execute(
+        delete(ShiftAssignment).where(ShiftAssignment.employee_id.in_(employee_ids), ShiftAssignment.work_date.in_(dates))
+    ).rowcount
+    for emp_id in employee_ids:
+        for day in dates:
+            _day_off(db, emp_id, day, user, data.notes, data.kind)
+    audit.record(
+        db, user, data.kind, "shift_day_off", None,
+        {**data.model_dump(mode="json"), "dias": len(dates), "turnos_quitados": removed},
+    )
+    db.commit()
+    return LeaveBulkOut(days=len(dates) * len(employee_ids), shifts_removed=removed)
 
 
 @router.delete("/days-off/{day_off_id}", status_code=status.HTTP_204_NO_CONTENT)

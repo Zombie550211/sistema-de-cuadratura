@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { api, AREAS } from "../lib/api";
 import { fmtDate } from "../lib/format";
@@ -40,6 +40,23 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
   const [preview, setPreview] = useState<RosterResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  /** Un Excel de la nómina se convierte en el mismo texto que saldría al copiar y pegar. */
+  async function loadExcel(file: File) {
+    setBusy(true);
+    setError(null);
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      setText((await api.post<{ text: string }>("/employees/import/excel", form)).text);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  }
 
   async function send(dryRun: boolean) {
     setBusy(true);
@@ -61,7 +78,14 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
       {error && <div className="alert" style={{ marginBottom: 16 }}>{error}</div>}
       {!preview ? (
         <div className="field">
-          <span>Copie las columnas desde Excel y péguelas aquí: código · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa). También puede pegar la planilla completa de RRHH con sus encabezados (N°, EMPLEADO, CARGO, SUELDO…): se guardan sueldo, DUI, NIT, ISSS, AFP, cuenta, huellas, expediente y finalización. La columna de contraseñas se ignora.</span>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <span className="caption">¿Tiene el archivo de Excel? Cárguelo directamente.</span>
+            <button type="button" className="btn ghost sm" disabled={busy} onClick={() => fileInput.current?.click()}>
+              {busy ? "Leyendo…" : "Cargar Excel (.xlsx / .xls)"}
+            </button>
+            <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={(e) => e.target.files?.[0] && loadExcel(e.target.files[0])} />
+          </div>
+          <span>O copie las columnas desde Excel y péguelas aquí: código · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa). También puede pegar la planilla completa de RRHH con sus encabezados (N°, EMPLEADO, CARGO, SUELDO…): se guardan sueldo, DUI, NIT, ISSS, AFP, cuenta, huellas, expediente y finalización. La columna de contraseñas se ignora.</span>
           <textarea
             className="input mono"
             rows={12}

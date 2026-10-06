@@ -1,11 +1,13 @@
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, CurrentUser, Staff
+from app.core.config import get_settings
 from app.models import (
     AREAS,
     SalaryCertificate,
@@ -15,6 +17,7 @@ from app.models import (
     IntegrationSync,
     Role,
     ShiftAssignment,
+    ShiftDayOff,
     User,
     area_for,
 )
@@ -28,6 +31,8 @@ from app.schemas import (
     EmployeeOut,
     EmployeeScheduleOut,
     EmployeeUpdate,
+    ExcelTextOut,
+    LeaveTotals,
     Page,
     RosterImportIn,
     RosterImportOut,
@@ -35,7 +40,8 @@ from app.schemas import (
 )
 from app.services import audit
 from app.services.attendance_day import employee_days
-from app.services.attendance_import import relink_badge
+from app.services.attendance_import import link_unmapped_punches, relink_badge
+from app.services.excel import ExcelError, sheet_as_text
 from app.services.user_code import assign_user_codes
 from app.services.employee_roster import apply_roster, match_roster, parse_roster
 
@@ -140,12 +146,25 @@ def employee_schedule(employee_id: int, date_from: date, date_to: date, db: DB, 
         .join(ShiftAssignment, ShiftAssignment.sync_id == IntegrationSync.id)
         .where(ShiftAssignment.employee_id == employee_id)
     )
+    year = date_from.year
+    leave = dict(
+        db.execute(
+            select(ShiftDayOff.kind, func.count())
+            .where(
+                ShiftDayOff.employee_id == employee_id,
+                ShiftDayOff.work_date >= date(year, 1, 1),
+                ShiftDayOff.work_date <= date(year, 12, 31),
+            )
+            .group_by(ShiftDayOff.kind)
+        ).tuples().all()
+    )
     return EmployeeScheduleOut(
         employee_id=employee_id,
         date_from=date_from,
         date_to=date_to,
         last_crm_sync_at=last_sync,
         days=employee_days(db, employee_id, date_from, date_to),
+        leave=LeaveTotals(year=year, vacacion=leave.get("vacacion", 0), compensatorio=leave.get("compensatorio", 0)),
     )
 
 
@@ -165,6 +184,8 @@ def import_roster(data: RosterImportIn, db: DB, user: HR):
     if data.dry_run or errors or not rows:
         return out
     result = apply_roster(db, matches)
+    db.flush()
+    link_unmapped_punches(db)
     audit.record(db, user, "importar", "employee", None, result)
     try:
         db.commit()
@@ -187,6 +208,7 @@ def create_employee(data: EmployeeCreate, db: DB, user: HR):
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, _integrity_message(exc))
     relink_badge(db, employee.id, None, employee.badge_number)
+    link_unmapped_punches(db)
     assign_user_codes(db, [employee])
     audit.record(db, user, "crear", "employee", employee.id, {"codigo": employee.code})
     db.commit()
@@ -216,12 +238,37 @@ def update_employee(employee_id: int, data: EmployeeUpdate, db: DB, user: HR):
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, _integrity_message(exc))
     relink_badge(db, employee.id, old_badge, employee.badge_number)
+    link_unmapped_punches(db)
     assign_user_codes(db, [employee])
     if changes:
         audit.record(db, user, "editar", "employee", employee.id, changes)
     db.commit()
     db.refresh(employee)
     return employee
+
+
+@router.delete("/employees/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_employee(employee_id: int, db: DB, user: HR):
+    """Borra la ficha con sus turnos y constancias. Sus marcas del reloj se conservan sin nombre."""
+    employee = db.get(Employee, employee_id)
+    if employee is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
+    audit.record(
+        db, user, "eliminar", "employee", employee.id,
+        {"codigo": employee.code, "nombre": employee.full_name, "dui": employee.dui, "id_reloj": employee.badge_number},
+    )
+    db.execute(sa_delete(Employee).where(Employee.id == employee.id))
+    db.commit()
+
+
+@router.post("/employees/import/excel", response_model=ExcelTextOut)
+async def roster_excel_to_text(db: DB, _: HR, file: Annotated[UploadFile, File()]):
+    """Convierte la nómina en Excel a texto con tabulaciones, como si se copiara de Excel."""
+    content = await file.read(get_settings().max_upload_mb * 1024 * 1024 + 1)
+    try:
+        return ExcelTextOut(text=sheet_as_text(content))
+    except ExcelError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @router.get("/employees/{employee_id}/certificates", response_model=list[CertificateOut])

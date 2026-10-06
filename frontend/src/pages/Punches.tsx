@@ -1,101 +1,179 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { api, type ImportBatch, type Page, type Punch } from "../lib/api";
-import { addDays, fmtLongDate, fmtTimeSec, localDate, today } from "../lib/format";
+import { IconChevronLeft, IconChevronRight } from "../components/Icons";
+import { Modal } from "../components/Modal";
+import { RowMenu, type RowAction } from "../components/RowMenu";
+import { api, ApiError, AREAS, localName, type Area, type Employee, type ImportBatch, type Locales, type Page, type Punch } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { addDays, fmtLongDate, fmtTimeSec, fmtWeek, localDate, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 interface DayRow {
   key: string;
   date: string;
   badge: string;
+  deviceId: number;
   name: string | null;
   code: string | null;
   punches: Punch[];
+  /** Regla de RRHH: solo cuenta la primera marca válida del día (la entrada). */
+  checkIn: Punch | null;
+  /** Marcas válidas después de la entrada: el agente salió y volvió, no cuentan. */
+  ignored: number;
 }
 
 type View = "lista" | "dia";
+type Dialog = { kind: "edit" | "delete" | "link"; row: DayRow } | null;
 
-/** Marcaciones en dos vistas: lista (una fila por marca: agente, día, hora y huella)
- *  y línea de tiempo (una fila por empleado y día, con cada marca como chip). */
-export function Punches() {
-  const [params] = useSearchParams();
-  // Desde Importar llega ?desde=&hasta= con el periodo del archivo recién subido.
-  const [from, setFrom] = useState(() => params.get("desde") ?? addDays(today(), -6));
-  const [to, setTo] = useState(() => params.get("hasta") ?? today());
+function entry(punches: Punch[]) {
+  const valid = punches.filter((p) => !p.is_double_tap);
+  return { checkIn: valid[0] ?? null, ignored: Math.max(valid.length - 1, 0) };
+}
+
+function punchRole(r: DayRow, p: Punch): { cls: string; title: string } {
+  const edited = p.original_punched_at ? ` · corregida (el reloj marcó ${fmtTimeSec(p.original_punched_at)})` : "";
+  const cls = p.original_punched_at ? " edited" : "";
+  if (p.is_double_tap) return { cls: " double" + cls, title: "Doble marca (ignorada)" + edited };
+  if (p.id === r.checkIn?.id) return { cls: " in" + cls, title: "Entrada" + edited };
+  return { cls: " middle" + cls, title: "No cuenta: solo vale la primera marca del día" + edited };
+}
+
+/** Marcaciones de una sección (como Empleados; `area` null = IDs del reloj sin empleado), con una
+ *  pestaña por local y dos vistas: lista (una fila por persona y día con su hora de entrada y
+ *  huella) y por día (cada marca como chip, con la entrada resaltada). */
+export function Punches({ area }: { area: Area | null }) {
+  const section = area ? AREAS.find((a) => a.area === area)!.label : "Sin empleado";
+  const sectionQuery = area ? { area } : { only_unmapped: true };
+  const [params, setParams] = useSearchParams();
+  const { can } = useAuth();
+  const canEdit = can("admin", "rrhh");
+  // Se ve una semana (lunes a domingo) a la vez: la del último archivo subido; las anteriores
+  // quedan ocultas y se recorren con las flechas. Desde Importar llega ?hasta=&local= del archivo.
+  const [week, setWeek] = useState(() => weekStart(params.get("hasta") ?? params.get("desde") ?? today()));
+  const [latestWeek, setLatestWeek] = useState<string | null>(null);
+  const from = week;
+  const to = addDays(week, 6);
   const [search, setSearch] = useState("");
   const [showDoubles, setShowDoubles] = useState(true);
-  const [onlyUnmapped, setOnlyUnmapped] = useState(false);
   const [view, setView] = useState<View>("lista");
+  const [dialog, setDialog] = useState<Dialog>(null);
 
-  // Sin rango en la URL, se abre en el periodo del último archivo subido.
+  const locales = useAsync(() => api.get<Locales>("/attendance/locales", sectionQuery), [area]);
+  const tabs = (locales.data?.devices ?? []).filter((d) => d.punches > 0);
+  const [lastDevice, setLastDevice] = useState<number | null>(null);
+  const wanted = Number(params.get("local")) || lastDevice;
+  const deviceId = tabs.find((d) => d.id === wanted)?.id ?? tabs[0]?.id ?? null;
+
+  // Sin fecha en la URL, se abre en la semana y el local del último archivo subido.
   useEffect(() => {
-    if (params.get("desde")) return;
     api
       .get<Page<ImportBatch>>("/attendance/imports", { limit: 1 })
       .then((page) => {
         const last = page.items[0];
-        if (last?.date_from && last.date_to) {
-          setFrom(last.date_from);
-          setTo(last.date_to);
-        }
+        if (!last?.date_to) return;
+        setLatestWeek(weekStart(last.date_to));
+        if (params.get("hasta") || params.get("desde")) return;
+        setWeek(weekStart(last.date_to));
+        setLastDevice(last.device.id);
       })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { data, error, loading } = useAsync(
+  const { data, error, loading, reload } = useAsync(
     () =>
-      api.get<Page<Punch>>("/attendance/punches", {
-        date_from: from,
-        date_to: to,
-        include_double_taps: showDoubles,
-        only_unmapped: onlyUnmapped,
-        limit: 2000,
-      }),
-    [from, to, showDoubles, onlyUnmapped],
+      deviceId
+        ? api.get<Page<Punch>>("/attendance/punches", {
+            date_from: from,
+            date_to: to,
+            device_id: deviceId,
+            include_double_taps: showDoubles,
+            ...sectionQuery,
+            limit: 2000,
+          })
+        : Promise.resolve({ items: [], total: 0 }),
+    [from, to, deviceId, showDoubles, area],
   );
 
-  const matches = (q: string, badge: string, name?: string | null, code?: string | null) =>
-    !q || badge === q || !!name?.toLowerCase().includes(q) || !!code?.toLowerCase().includes(q);
+  function selectTab(id: number) {
+    const next = new URLSearchParams(params);
+    next.set("local", String(id));
+    setParams(next, { replace: true });
+  }
 
-  const list = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return (data?.items ?? []).filter((p) => matches(q, p.badge, p.employee?.full_name, p.employee?.code));
-  }, [data, search]);
+  function changed() {
+    setDialog(null);
+    reload();
+    locales.reload();
+  }
 
-  const days = useMemo(() => {
-    const rows = new Map<string, DayRow>();
+  const rows = useMemo(() => {
+    const byKey = new Map<string, DayRow>();
     for (const p of data?.items ?? []) {
       const date = localDate(p.punched_at);
       const key = `${date}|${p.badge}`;
-      if (!rows.has(key)) {
-        rows.set(key, { key, date, badge: p.badge, name: p.employee?.full_name ?? null, code: p.employee?.code ?? null, punches: [] });
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          date,
+          badge: p.badge,
+          deviceId: p.device_id,
+          name: p.employee?.full_name ?? null,
+          code: p.employee?.code ?? null,
+          punches: [],
+          checkIn: null,
+          ignored: 0,
+        });
       }
-      rows.get(key)!.punches.push(p);
+      byKey.get(key)!.punches.push(p);
     }
     const q = search.trim().toLowerCase();
-    const list = [...rows.values()]
-      .filter((r) => matches(q, r.badge, r.name, r.code))
-      .map((r) => ({ ...r, punches: [...r.punches].sort((a, b) => a.punched_at.localeCompare(b.punched_at)) }));
+    const list = [...byKey.values()]
+      .filter((r) => !q || r.badge === q || !!r.name?.toLowerCase().includes(q) || !!r.code?.toLowerCase().includes(q))
+      .map((r) => {
+        const punches = [...r.punches].sort((a, b) => a.punched_at.localeCompare(b.punched_at));
+        return { ...r, punches, ...entry(punches) };
+      });
     list.sort(
       (a, b) =>
-        b.date.localeCompare(a.date) ||
+        a.date.localeCompare(b.date) ||
         Number(!a.name) - Number(!b.name) ||
         (a.name ?? "").localeCompare(b.name ?? "") ||
         a.badge.localeCompare(b.badge, undefined, { numeric: true }),
     );
-
-    const byDate = new Map<string, DayRow[]>();
-    for (const r of list) byDate.set(r.date, [...(byDate.get(r.date) ?? []), r]);
-    return [...byDate.entries()];
+    return list;
   }, [data, search]);
+
+  const days = useMemo(() => {
+    const byDate = new Map<string, DayRow[]>();
+    for (const r of rows) byDate.set(r.date, [...(byDate.get(r.date) ?? []), r]);
+    return [...byDate.entries()];
+  }, [rows]);
+
+  function actions(r: DayRow): RowAction[] {
+    const list: RowAction[] = [{ label: "Editar marcas", onClick: () => setDialog({ kind: "edit", row: r }) }];
+    if (!r.name) list.push({ label: "Asignar a un empleado", onClick: () => setDialog({ kind: "link", row: r }) });
+    list.push({ label: "Eliminar marcas del día", danger: true, onClick: () => setDialog({ kind: "delete", row: r }) });
+    return list;
+  }
+
+  const agentCell = (r: DayRow) =>
+    r.name ? (
+      <>
+        <div>{r.name}</div>
+        <div className="caption">{r.code}</div>
+      </>
+    ) : (
+      <span className="badge warn">ID {r.badge} sin empleado</span>
+    );
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
-          <h1>Marcaciones</h1>
-          <p>Marcas crudas del reloj en hora de El Salvador. Las tachadas son dobles marcas y no cuentan.</p>
+          <span className="caption">Marcaciones</span>
+          <h1>{section}</h1>
+          <p>{!area && "IDs del reloj que aún no tienen empleado: asígnelos desde el menú ⋯ de cada fila. "}Hora de El Salvador. Solo cuenta la primera marca del día (la entrada); las demás no cuentan. Las tachadas son dobles marcas.</p>
         </div>
         <div className="chips">
           <button className={`btn sm${view === "lista" ? "" : " ghost"}`} onClick={() => setView("lista")}>
@@ -107,25 +185,46 @@ export function Punches() {
         </div>
       </div>
 
+      {tabs.length > 0 && (
+        <div className="tabs" role="tablist" aria-label="Locales">
+          {tabs.map((d) => (
+            <button
+              key={d.id}
+              role="tab"
+              aria-selected={d.id === deviceId}
+              className={d.id === deviceId ? "active" : undefined}
+              onClick={() => selectTab(d.id)}
+              title={`Reloj ${d.serial_number}`}
+            >
+              Local {localName(d)}
+              <span className="count">{d.punches}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="card row">
-        <label className="field">
-          <span>Desde</span>
-          <input className="input" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>Hasta</span>
-          <input className="input" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
-        </label>
+        <div className="row" style={{ gap: 4, alignSelf: "flex-end" }}>
+          <button className="icon-btn" onClick={() => setWeek(addDays(week, -7))} aria-label="Semana anterior">
+            <IconChevronLeft width={20} height={20} />
+          </button>
+          <span className="sch-week">{fmtWeek(week)}</span>
+          <button className="icon-btn" onClick={() => setWeek(addDays(week, 7))} aria-label="Semana siguiente">
+            <IconChevronRight width={20} height={20} />
+          </button>
+          {latestWeek && latestWeek !== week && (
+            <button className="btn ghost sm" onClick={() => setWeek(latestWeek)}>
+              Último archivo
+            </button>
+          )}
+        </div>
         <label className="field" style={{ flex: 1, minWidth: 200 }}>
           <span>Buscar</span>
-          <input className="input" placeholder="Nombre, código o ID de reloj" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className="input" placeholder="Nombre, código o huella" value={search} onChange={(e) => setSearch(e.target.value)} />
         </label>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignSelf: "flex-end" }}>
           <label className="check">
             <input type="checkbox" checked={showDoubles} onChange={(e) => setShowDoubles(e.target.checked)} /> Mostrar dobles marcas
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={onlyUnmapped} onChange={(e) => setOnlyUnmapped(e.target.checked)} /> Solo IDs sin empleado
           </label>
         </div>
       </div>
@@ -139,13 +238,13 @@ export function Punches() {
         <div className="center-screen" style={{ minHeight: 200 }}>
           <div className="spinner" />
         </div>
-      ) : days.length === 0 ? (
-        <div className="card empty">No hay marcaciones en este rango.</div>
+      ) : rows.length === 0 ? (
+        <div className="card empty">{tabs.length ? "No hay marcaciones en este rango." : `No hay marcaciones de ${section.toLowerCase()}.`}</div>
       ) : view === "lista" ? (
         <div className="card">
           <div className="card-head">
-            <h3>Registro de marcas</h3>
-            <span className="caption">{list.length} marcas</span>
+            <h3>Entradas</h3>
+            <span className="caption">{rows.length} registros</span>
           </div>
           <div className="table-wrap">
             <table className="table">
@@ -153,34 +252,46 @@ export function Punches() {
                 <tr>
                   <th>Agente</th>
                   <th>Día</th>
-                  <th>Hora</th>
+                  <th>Hora de entrada</th>
                   <th>Huella</th>
+                  {canEdit && <th className="row-actions" />}
                 </tr>
               </thead>
               <tbody>
-                {list.map((p) => (
-                  <tr key={p.id} className={p.is_double_tap ? "muted" : undefined}>
-                    <td>
-                      {p.employee ? (
-                        <>
-                          <div>{p.employee.full_name}</div>
-                          <div className="caption">{p.employee.code}</div>
-                        </>
-                      ) : (
-                        <span className="badge warn">Sin empleado</span>
-                      )}
-                    </td>
-                    <td className="nowrap">{fmtLongDate(localDate(p.punched_at))}</td>
+                {rows.map((r) => (
+                  <tr key={r.key}>
+                    <td>{agentCell(r)}</td>
+                    <td className="nowrap">{fmtLongDate(r.date)}</td>
                     <td className="nowrap">
-                      <span className={`punch${p.is_double_tap ? " double" : ""}`} title={p.is_double_tap ? "Doble marca (ignorada)" : "Marca válida"}>
-                        {fmtTimeSec(p.punched_at)}
-                      </span>
+                      {r.checkIn ? (
+                        <span className={`punch${punchRole(r, r.checkIn).cls}`} title={punchRole(r, r.checkIn).title}>
+                          {fmtTimeSec(r.checkIn.punched_at)}
+                        </span>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                      {r.ignored > 0 && (
+                        <div
+                          className="caption"
+                          title={r.punches
+                            .filter((p) => !p.is_double_tap && p.id !== r.checkIn?.id)
+                            .map((p) => fmtTimeSec(p.punched_at))
+                            .join(", ")}
+                        >
+                          +{r.ignored} marca{r.ignored === 1 ? "" : "s"} más (no cuenta{r.ignored === 1 ? "" : "n"})
+                        </div>
+                      )}
                     </td>
                     <td>
                       <span className="badge accent" title="N° de huella (ID en el reloj)">
-                        {p.badge}
+                        {r.badge}
                       </span>
                     </td>
+                    {canEdit && (
+                      <td className="num row-actions">
+                        <RowMenu actions={actions(r)} />
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -188,59 +299,204 @@ export function Punches() {
           </div>
         </div>
       ) : (
-        days.map(([date, rows]) => (
+        days.map(([date, dayRows]) => (
           <div className="card" key={date}>
             <div className="card-head">
               <h3>{fmtLongDate(date)}</h3>
-              <span className="caption">{rows.length} personas</span>
+              <span className="caption">{dayRows.length} personas</span>
             </div>
             <div className="table-wrap">
               <table className="table">
                 <tbody>
-                  {rows.map((r) => {
-                    const valid = r.punches.filter((p) => !p.is_double_tap).length;
-                    return (
-                      <tr key={r.key}>
-                        <td style={{ width: 260 }}>
-                          {r.name ? (
-                            <>
-                              <div>{r.name}</div>
-                              <div className="caption">
-                                {r.code} · ID reloj {r.badge}
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <span className="badge warn">ID {r.badge} sin empleado</span>
-                            </>
-                          )}
-                        </td>
-                        <td>
-                          <div className="punch-list">
-                            {r.punches.map((p, i) => (
-                              <span
-                                key={p.id}
-                                className={`punch${p.is_double_tap ? " double" : ""}`}
-                                style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }}
-                                title={p.is_double_tap ? "Doble marca (ignorada)" : "Marca válida"}
-                              >
+                  {dayRows.map((r) => (
+                    <tr key={r.key}>
+                      <td style={{ width: 260 }}>
+                        {agentCell(r)}
+                        {r.name && <div className="caption">Huella {r.badge}</div>}
+                      </td>
+                      <td>
+                        <div className="punch-list">
+                          {r.punches.map((p, i) => {
+                            const role = punchRole(r, p);
+                            return (
+                              <span key={p.id} className={`punch${role.cls}`} style={{ animationDelay: `${Math.min(i, 12) * 30}ms` }} title={role.title}>
                                 {fmtTimeSec(p.punched_at)}
                               </span>
-                            ))}
-                          </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      {canEdit && (
+                        <td className="num row-actions">
+                          <RowMenu actions={actions(r)} />
                         </td>
-                        <td className="num" style={{ width: 120 }}>
-                          {valid === 1 ? <span className="badge danger">1 marca</span> : <span className="caption">{valid} marcas</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                      )}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           </div>
         ))
       )}
+
+      {dialog?.kind === "edit" && <EditDay row={dialog.row} onChanged={reload} onDone={changed} />}
+      {dialog?.kind === "link" && <LinkBadge row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
+      {dialog?.kind === "delete" && <DeleteDay row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
     </div>
+  );
+}
+
+/** Todas las marcas de una persona en un día: RRHH corrige la hora o elimina una marca. */
+function EditDay({ row, onChanged, onDone }: { row: DayRow; onChanged: () => void; onDone: () => void }) {
+  const [punches, setPunches] = useState(row.punches);
+  const [times, setTimes] = useState<Record<number, string>>(() => Object.fromEntries(row.punches.map((p) => [p.id, fmtTimeSec(p.punched_at)])));
+  const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const firstValid = punches.find((x) => !x.is_double_tap)?.id;
+
+  async function run(id: number, action: () => Promise<unknown>) {
+    setBusy(id);
+    setError(null);
+    try {
+      await action();
+      onChanged();
+    } catch (err) {
+      setError((err as ApiError).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const save = (p: Punch) =>
+    run(p.id, async () => {
+      const updated = await api.patch<Punch>(`/attendance/punches/${p.id}`, { punched_at: `${row.date}T${times[p.id]}-06:00` });
+      setPunches((list) => list.map((x) => (x.id === p.id ? updated : x)).sort((a, b) => a.punched_at.localeCompare(b.punched_at)));
+    });
+
+  const remove = (p: Punch) =>
+    run(p.id, async () => {
+      await api.delete(`/attendance/punches/${p.id}`);
+      setPunches((list) => list.filter((x) => x.id !== p.id));
+    });
+
+  return (
+    <Modal title="Editar marcas" onClose={onDone}>
+      <div className="stack">
+        <p>
+          <b>{row.name ?? `ID ${row.badge} sin empleado`}</b> · {fmtLongDate(row.date)} · huella {row.badge}
+        </p>
+        <p className="caption">Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj.</p>
+        {punches.length === 0 && <div className="empty">No quedan marcas este día.</div>}
+        {punches.map((p) => {
+          const dirty = times[p.id] !== fmtTimeSec(p.punched_at);
+          return (
+            <div key={p.id} className="row" style={{ alignItems: "center", gap: 8 }}>
+              <input
+                className="input mono"
+                type="time"
+                step={1}
+                style={{ width: 150 }}
+                value={times[p.id]}
+                onChange={(e) => setTimes({ ...times, [p.id]: e.target.value.length === 5 ? `${e.target.value}:00` : e.target.value })}
+              />
+              <span className="caption" style={{ flex: 1 }}>
+                {p.is_double_tap ? "Doble marca" : p.id === firstValid ? "Entrada" : "No cuenta"}
+                {p.original_punched_at && ` · el reloj marcó ${fmtTimeSec(p.original_punched_at)}`}
+              </span>
+              <button className="btn sm" disabled={!dirty || busy !== null} onClick={() => save(p)}>
+                Guardar
+              </button>
+              <button className="btn sm danger" disabled={busy !== null} onClick={() => remove(p)}>
+                Eliminar
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+      <div className="modal-foot">
+        <button className="btn" onClick={onDone}>
+          Listo
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeleteDay({ row, onClose, onDone }: { row: DayRow; onClose: () => void; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      for (const p of row.punches) await api.delete(`/attendance/punches/${p.id}`);
+      onDone();
+    } catch (err) {
+      setError((err as ApiError).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Eliminar marcas del día" onClose={onClose}>
+      <div className="stack">
+        <p>
+          Se eliminarán las {row.punches.length} marcas de <b>{row.name ?? `ID ${row.badge}`}</b> del {fmtLongDate(row.date).toLowerCase()}.
+        </p>
+        <p className="caption">Quedan registradas en la auditoría y no vuelven a entrar al importar de nuevo el archivo del reloj.</p>
+      </div>
+      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose} disabled={busy}>
+          Cancelar
+        </button>
+        <button className="btn danger" onClick={confirm} disabled={busy}>
+          {busy ? "Eliminando…" : "Eliminar"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Un ID del reloj sin empleado: RRHH elige a la persona y todas sus marcas toman su nombre. */
+function LinkBadge({ row, onClose, onDone }: { row: DayRow; onClose: () => void; onDone: () => void }) {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const found = useAsync(
+    () => (q.trim().length < 2 ? Promise.resolve(null) : api.get<Page<Employee>>("/employees", { q: q.trim(), limit: 10 })),
+    [q],
+  );
+
+  async function link(e: Employee) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post("/attendance/badges/link", { device_id: row.deviceId, badge: row.badge, employee_id: e.id });
+      onDone();
+    } catch (err) {
+      setError((err as ApiError).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Asignar huella ${row.badge}`} onClose={onClose}>
+      <div className="stack">
+        <p className="caption">Todas las marcas de la huella {row.badge} en este local quedarán a nombre de la persona que elija.</p>
+        <input className="input" autoFocus placeholder="Buscar empleado por nombre o código" value={q} onChange={(e) => setQ(e.target.value)} />
+        {found.data?.items.map((e) => (
+          <button key={e.id} className="btn ghost" style={{ justifyContent: "space-between" }} disabled={busy} onClick={() => link(e)}>
+            <span>{e.full_name}</span>
+            <span className="caption">{e.code}</span>
+          </button>
+        ))}
+        {found.data?.items.length === 0 && <div className="empty">No hay empleados con ese nombre.</div>}
+      </div>
+      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+    </Modal>
   );
 }

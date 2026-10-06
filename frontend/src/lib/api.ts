@@ -64,6 +64,9 @@ export const AREAS: { area: Area; slug: string; label: string }[] = [
   { area: "ventas", slug: "agentes", label: "Agentes de ventas" },
 ];
 
+/** Sección de Marcaciones con las marcas cuyo ID de reloj aún no tiene empleado. */
+export const UNMAPPED_SLUG = "sin-empleado";
+
 export const areaPath = (area: Area) => `/empleados/${AREAS.find((a) => a.area === area)!.slug}`;
 
 export interface EmployeeInput {
@@ -141,6 +144,16 @@ export interface Device {
   serial_number: string;
   name: string;
   location: string | null;
+  /** Local del reloj (columna HUELLA de la planilla, p. ej. "LA17"). */
+  fingerprint_key: string | null;
+}
+
+/** Nombre del local para mostrar: el de la planilla o, si no se conoce, el del reloj. */
+export const localName = (d: Device) => d.fingerprint_key ?? d.name;
+
+export interface Locales {
+  devices: (Device & { punches: number })[];
+  known: string[];
 }
 
 export interface ImportBatch {
@@ -163,6 +176,9 @@ export interface Punch {
   id: number;
   badge: string;
   punched_at: string;
+  /** Hora que trajo el reloj, si RRHH la corrigió. */
+  original_punched_at: string | null;
+  device_id: number;
   verify_mode: number;
   work_code: number;
   is_double_tap: boolean;
@@ -202,10 +218,19 @@ export interface ShiftAssignment {
 }
 
 /** Día libre fijado por RRHH (al reagendar o dar el día); el CRM no pone turno ese día. */
+export type DayOffKind = "libre" | "vacacion" | "compensatorio";
+
+export const DAY_OFF_LABEL: Record<DayOffKind, string> = {
+  libre: "Día libre",
+  vacacion: "Vacación",
+  compensatorio: "Compensatorio",
+};
+
 export interface ShiftDayOff {
   id: number;
   employee_id: number;
   work_date: string;
+  kind: DayOffKind;
   notes: string | null;
 }
 
@@ -213,6 +238,10 @@ export interface WorkDay {
   date: string;
   shift: ShiftAssignment | null;
   punches: { id: number; punched_at: string; is_double_tap: boolean }[];
+  /** Primera marca válida de la jornada: la entrada. Las demás no cuentan. */
+  check_in: { id: number; punched_at: string } | null;
+  /** Día sin turno fijado por RRHH (libre, vacación o compensatorio). */
+  day_off: ShiftDayOff | null;
 }
 
 export interface EmployeeSchedule {
@@ -221,6 +250,8 @@ export interface EmployeeSchedule {
   date_to: string;
   last_crm_sync_at: string | null;
   days: WorkDay[];
+  /** Días de vacación y compensatorios en el año de la semana mostrada. */
+  leave: { year: number; vacacion: number; compensatorio: number };
 }
 
 export interface DashboardSummary {

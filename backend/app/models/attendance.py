@@ -25,6 +25,9 @@ class Device(TimestampMixin, Base):
     serial_number: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(120))
     location: Mapped[str | None] = mapped_column(String(160))
+    # Columna HUELLA de la planilla que corresponde a este reloj (p. ej. "LA17"): con ella se
+    # reconoce al empleado aunque no tenga ID de reloj.
+    fingerprint_key: Mapped[str | None] = mapped_column(String(40))
 
 
 class ImportBatch(Base):
@@ -55,8 +58,9 @@ class ImportBatch(Base):
 
 
 class Punch(Base):
-    """Marcación cruda tal como viene del reloj. Nunca se borra ni se edita la hora:
-    las correcciones de RRHH se registrarán aparte para mantener la trazabilidad."""
+    """Marcación tal como viene del reloj. RRHH puede corregir la hora o eliminarla, pero nunca
+    se pierde el dato: se guarda la hora original y la eliminación es lógica (deleted_at), para
+    que el reloj no la vuelva a meter en la próxima importación."""
 
     __tablename__ = "punches"
     __table_args__ = (
@@ -78,5 +82,10 @@ class Punch(Base):
     # True si es una repetición dentro de la ventana de doble marca de otra marca previa.
     is_double_tap: Mapped[bool] = mapped_column(Boolean, default=False)
     import_batch_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id"), index=True)
+    # Hora que trajo el reloj, si RRHH la corrigió.
+    original_punched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    edited_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     employee = relationship("Employee", lazy="joined")

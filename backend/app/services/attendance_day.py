@@ -3,6 +3,9 @@
 Una marca pertenece a la jornada cuyo turno la contiene con un margen de SHIFT_MARGIN antes y
 después (así la salida 06:05 de un turno 22:00–06:00 cuenta para el día en que inició el turno).
 Si ninguna jornada la contiene, se asigna a su fecha calendario local.
+
+Regla de RRHH: solo cuenta la primera marca válida de la jornada, que es la entrada. Las demás
+(el agente sale y entra varias veces al día) no cuentan. No se toma hora de salida.
 Es la base sobre la que se construirá el motor de cuadratura (tardanzas, horas extra, etc.).
 """
 
@@ -13,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Punch, ShiftAssignment
+from app.models import Punch, ShiftAssignment, ShiftDayOff
 
 SHIFT_MARGIN = timedelta(hours=4)
 
@@ -23,6 +26,17 @@ class WorkDay:
     date: date
     shift: ShiftAssignment | None = None
     punches: list[Punch] = field(default_factory=list)
+    # Día sin turno fijado por RRHH: libre, vacación o compensatorio.
+    day_off: ShiftDayOff | None = None
+
+    @property
+    def valid_punches(self) -> list[Punch]:
+        return sorted((p for p in self.punches if not p.is_double_tap), key=lambda p: p.punched_at)
+
+    @property
+    def check_in(self) -> Punch | None:
+        valid = self.valid_punches
+        return valid[0] if valid else None
 
 
 def employee_days(db: Session, employee_id: int, date_from: date, date_to: date) -> list[WorkDay]:
@@ -45,6 +59,14 @@ def employee_days(db: Session, employee_id: int, date_from: date, date_to: date)
     for shift in shifts:
         if shift.work_date in days:
             days[shift.work_date].shift = shift
+    for off in db.scalars(
+        select(ShiftDayOff).where(
+            ShiftDayOff.employee_id == employee_id,
+            ShiftDayOff.work_date >= date_from,
+            ShiftDayOff.work_date <= date_to,
+        )
+    ):
+        days[off.work_date].day_off = off
 
     window_start = datetime.combine(date_from, time.min, tz) - SHIFT_MARGIN
     window_end = datetime.combine(date_to + timedelta(days=1), time.min, tz) + timedelta(hours=12)
@@ -52,6 +74,7 @@ def employee_days(db: Session, employee_id: int, date_from: date, date_to: date)
         select(Punch)
         .where(
             Punch.employee_id == employee_id,
+            Punch.deleted_at.is_(None),
             Punch.punched_at >= window_start,
             Punch.punched_at < window_end,
         )

@@ -7,10 +7,10 @@ import "./styles.css";
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { Layout } from "./components/Layout";
-import { AREAS, type Role } from "./lib/api";
+import { AREAS, UNMAPPED_SLUG, type Role } from "./lib/api";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { Dashboard } from "./pages/Dashboard";
 import { EmployeeProfile, EmployeeProfilePage } from "./pages/EmployeeProfile";
@@ -23,6 +23,11 @@ import { Schedules } from "./pages/Schedules";
 import { Users } from "./pages/Users";
 
 const STAFF: Role[] = ["admin", "rrhh"];
+
+/** Redirige conservando ?desde=&hasta=&local= (p. ej. el enlace que deja Importar). */
+function KeepQuery({ to }: { to: string }) {
+  return <Navigate to={`${to}${useLocation().search}`} replace />;
+}
 
 function Guard({ roles, children }: { roles: Role[]; children: React.ReactNode }) {
   const { can } = useAuth();
@@ -64,7 +69,11 @@ function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
-        <Route path="marcaciones" element={<Punches />} />
+        <Route path="marcaciones" element={<KeepQuery to={`/marcaciones/${AREAS.find((a) => a.area === "ventas")!.slug}`} />} />
+        {AREAS.map((a) => (
+          <Route key={a.slug} path={`marcaciones/${a.slug}`} element={<Punches key={a.area} area={a.area} />} />
+        ))}
+        <Route path={`marcaciones/${UNMAPPED_SLUG}`} element={<Punches key="sin" area={null} />} />
         <Route path="importar" element={<Guard roles={["admin", "rrhh"]}><Import /></Guard>} />
         <Route path="horarios" element={<Guard roles={STAFF}><Schedules /></Guard>} />
         <Route path="empleados" element={<Navigate to={`/empleados/${AREAS[0].slug}`} replace />} />

@@ -4,7 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { IconChevronLeft, IconChevronRight, IconFile } from "../components/Icons";
 import { type IssuedCertificate, printCertificate, SalaryCertificate, sanitizeCertificateHtml, TEMPLATES } from "../components/SalaryCertificate";
 import { useNow } from "../components/LiveClock";
-import { api, AREAS, areaPath, DOCS, type Department, type Employee, type EmployeeSchedule, type ShiftTemplate, type WorkDay } from "../lib/api";
+import { api, AREAS, areaPath, DAY_OFF_LABEL, DOCS, type Department, type Employee, type EmployeeSchedule, type ShiftTemplate, type WorkDay } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { addDays, fmtBirthday, fmtDate, fmtDateTime, fmtMoney, fmtShortDay, fmtTime, fmtTimeSec, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
@@ -25,7 +25,7 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
   const [start, setStart] = useState(() => weekStart(today()));
   const [editing, setEditing] = useState(false);
   const [certificate, setCertificate] = useState(false);
-  const [assigning, setAssigning] = useState(false);
+  const [assigning, setAssigning] = useState<false | "turno" | "vacacion" | "compensatorio">(false);
   const end = addDays(start, 6);
 
   const employee = useAsync(() => api.get<Employee>(`/employees/${employeeId}`), [employeeId]);
@@ -89,7 +89,7 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
           </div>
           {canEdit && (
             <div className="row">
-              <button className="btn ghost" onClick={() => setAssigning(true)} disabled={!templates.data || e.status !== "activo"}>
+              <button className="btn ghost" onClick={() => setAssigning("turno")} disabled={!templates.data || e.status !== "activo"}>
                 Asignar horario
               </button>
               <button className="btn ghost" onClick={() => setCertificate(true)}>
@@ -133,11 +133,23 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
 
       {canEdit && <Certificates items={certificates.data ?? []} error={certificates.error} name={e.full_name} />}
 
-      <div className="stats">
+      <div className="stats six">
         <Stat label="Horas programadas" value={fmtHours(totals.scheduled)} />
         <Stat label="Días con turno" value={String(totals.shiftDays)} />
         <Stat label="Días con marcas" value={String(totals.punchDays)} />
-        <Stat label="Días libres" value={String(7 - totals.shiftDays)} />
+        <Stat label="Días libres" value={String(7 - totals.shiftDays - totals.vacation - totals.compensatory)} />
+        <Stat
+          label="Días de vacación"
+          value={String(totals.vacation)}
+          hint={schedule.data ? `${schedule.data.leave.vacacion} en ${schedule.data.leave.year}` : undefined}
+          onAdd={canEdit ? () => setAssigning("vacacion") : undefined}
+        />
+        <Stat
+          label="Días compensatorio"
+          value={String(totals.compensatory)}
+          hint={schedule.data ? `${schedule.data.leave.compensatorio} en ${schedule.data.leave.year}` : undefined}
+          onAdd={canEdit ? () => setAssigning("compensatorio") : undefined}
+        />
       </div>
 
       <div className="card">
@@ -193,6 +205,7 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
           defaultFrom={start}
           defaultTo={end}
           initialSelected={[e.id]}
+          initialMode={assigning}
           onClose={() => setAssigning(false)}
           onDone={() => {
             setAssigning(false);
@@ -245,6 +258,11 @@ function DayRow({ day, maxHour }: { day: WorkDay; maxHour: number }) {
                 {shift.source === "crm" ? "Enviado por el CRM" : "Ajustado por RRHH"} · {shift.break_minutes} min descanso
               </span>
             </>
+          ) : day.day_off && day.day_off.kind !== "libre" ? (
+            <>
+              <b>{DAY_OFF_LABEL[day.day_off.kind]}</b>
+              {day.day_off.notes && <span className="caption">{day.day_off.notes}</span>}
+            </>
           ) : (
             <span className="muted">Libre</span>
           )}
@@ -276,11 +294,14 @@ function DayRow({ day, maxHour }: { day: WorkDay; maxHour: number }) {
       {day.punches.length > 0 && (
         <div className="day-row" style={{ paddingTop: 0, borderBottom: 0 }}>
           <div className="day-punches">
-            {day.punches.map((p) => (
-              <span key={p.id} className={`punch${p.is_double_tap ? " double" : ""}`}>
-                {fmtTimeSec(p.punched_at)}
-              </span>
-            ))}
+            {day.punches.map((p) => {
+              const role = p.is_double_tap ? " double" : p.id === day.check_in?.id ? " in" : " middle";
+              return (
+                <span key={p.id} className={`punch${role}`} title={role === " middle" ? "No cuenta: solo vale la primera marca del día" : undefined}>
+                  {fmtTimeSec(p.punched_at)}
+                </span>
+              );
+            })}
           </div>
         </div>
       )}
@@ -362,12 +383,22 @@ function Fact({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, hint, onAdd }: { label: string; value: string; hint?: string; onAdd?: () => void }) {
   return (
     <div className="stat">
       <div className="bar" />
       <span className="label">{label}</span>
       <span className="value mono">{value}</span>
+      {(hint || onAdd) && (
+        <span className="stat-foot">
+          {hint && <span className="caption">{hint}</span>}
+          {onAdd && (
+            <button className="btn ghost sm" onClick={onAdd}>
+              Asignar
+            </button>
+          )}
+        </span>
+      )}
     </div>
   );
 }
@@ -383,6 +414,8 @@ function weekTotals(days: WorkDay[]) {
     scheduled,
     shiftDays: days.filter((d) => d.shift).length,
     punchDays: days.filter((d) => d.punches.some((p) => !p.is_double_tap)).length,
+    vacation: days.filter((d) => d.day_off?.kind === "vacacion").length,
+    compensatory: days.filter((d) => d.day_off?.kind === "compensatorio").length,
   };
 }
 

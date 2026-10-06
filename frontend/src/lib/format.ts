@@ -44,6 +44,15 @@ export function addDays(ymd: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+const shortMonthFmt = new Intl.DateTimeFormat("es-SV", { timeZone: "UTC", day: "numeric", month: "short" });
+
+/** Semana de lunes a domingo como "5 oct – 11 oct 2026". */
+export function fmtWeek(monday: string): string {
+  const short = (ymd: string) => shortMonthFmt.format(new Date(`${ymd}T00:00:00Z`)).replace(".", "");
+  const sunday = addDays(monday, 6);
+  return `${short(monday)} – ${short(sunday)} ${sunday.slice(0, 4)}`;
+}
+
 /** Lunes de la semana que contiene la fecha. */
 export function weekStart(ymd: string): string {
   const dow = new Date(`${ymd}T00:00:00Z`).getUTCDay();

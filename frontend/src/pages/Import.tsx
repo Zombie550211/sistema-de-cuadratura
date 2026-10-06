@@ -1,35 +1,40 @@
 import { useRef, useState, type DragEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { IconFile, IconUpload } from "../components/Icons";
-import { api, ApiError, type ImportBatch, type Page } from "../lib/api";
-import { fmtDateTime } from "../lib/format";
+import { ConfirmDelete, RowMenu } from "../components/RowMenu";
+import { api, ApiError, localName, type ImportBatch, type Locales, type Page } from "../lib/api";
+import { fmtDate, fmtDateTime } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 export function Import() {
+  const navigate = useNavigate();
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ImportBatch | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [needsSerial, setNeedsSerial] = useState<File | null>(null);
-  const [serial, setSerial] = useState("");
+  const [needsLocal, setNeedsLocal] = useState<File | null>(null);
+  const [local, setLocal] = useState("");
+  const [deleting, setDeleting] = useState<ImportBatch | null>(null);
   const history = useAsync(() => api.get<Page<ImportBatch>>("/attendance/imports", { limit: 20 }), []);
+  const locales = useAsync(() => api.get<Locales>("/attendance/locales"), []);
 
-  async function upload(file: File, deviceSerial?: string) {
+  async function upload(file: File, localName?: string) {
     setBusy(true);
     setError(null);
     setResult(null);
     const form = new FormData();
     form.append("file", file);
-    if (deviceSerial) form.append("device_serial", deviceSerial);
+    if (localName) form.append("local", localName);
     try {
       setResult(await api.post<ImportBatch>("/attendance/imports", form));
-      setNeedsSerial(null);
+      setNeedsLocal(null);
       history.reload();
+      locales.reload();
     } catch (err) {
       const e = err as ApiError;
-      if (e.status === 422 && e.message.includes("número de serie")) setNeedsSerial(file);
+      if (e.status === 422 && e.message.includes("local")) setNeedsLocal(file);
       setError(e.message);
     } finally {
       setBusy(false);
@@ -49,7 +54,7 @@ export function Import() {
       <div className="page-head">
         <div>
           <h1>Importar reloj</h1>
-          <p>Suba el archivo attlog (.dat) que descarga del reloj con la USB.</p>
+          <p>Suba el archivo attlog (.dat) que descarga del reloj con la USB, o las marcaciones en Excel (.xlsx o .xls). El local se reconoce solo por las huellas.</p>
         </div>
       </div>
 
@@ -70,19 +75,22 @@ export function Import() {
           <IconUpload />
         </div>
         <h3>{busy ? "Procesando marcaciones…" : "Arrastre aquí el archivo del reloj"}</h3>
-        <span className="muted">o haga clic para buscarlo · ej. BINH221860214_attlog.dat</span>
-        <input ref={input} type="file" accept=".dat,.txt" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+        <span className="muted">o haga clic para buscarlo · ej. BINH221860214_attlog.dat o marcaciones.xlsx</span>
+        <input ref={input} type="file" accept=".dat,.txt,.xlsx,.xls" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
       </div>
 
       {error && <div className="alert">{error}</div>}
 
-      {needsSerial && (
+      {needsLocal && (
         <div className="card row">
           <label className="field" style={{ flex: 1 }}>
-            <span>Número de serie del reloj (aparece en el nombre del archivo o en la etiqueta del equipo)</span>
-            <input className="input" value={serial} onChange={(e) => setSerial(e.target.value)} placeholder="BINH221860214" />
+            <span>¿De qué local es este archivo? No se pudo reconocer por las huellas.</span>
+            <input className="input" list="locales-conocidos" value={local} onChange={(e) => setLocal(e.target.value)} placeholder="LA17" />
+            <datalist id="locales-conocidos">
+              {locales.data?.known.map((k) => <option key={k} value={k} />)}
+            </datalist>
           </label>
-          <button className="btn" style={{ alignSelf: "flex-end" }} disabled={!serial.trim() || busy} onClick={() => upload(needsSerial, serial.trim())}>
+          <button className="btn" style={{ alignSelf: "flex-end" }} disabled={!local.trim() || busy} onClick={() => upload(needsLocal, local.trim())}>
             Importar
           </button>
         </div>
@@ -91,9 +99,9 @@ export function Import() {
       {result && (
         <div className="card">
           <div className="card-head">
-            <h3>Importación completada</h3>
+            <h3>Importación completada · Local {localName(result.device)}</h3>
             <span className="badge accent">
-              {result.date_from} → {result.date_to}
+              {result.date_from && fmtDate(result.date_from)} → {result.date_to && fmtDate(result.date_to)}
             </span>
           </div>
           <div className="result-grid">
@@ -104,7 +112,7 @@ export function Import() {
             <Cell label="Líneas inválidas" value={result.invalid_lines} />
           </div>
           {result.date_from && result.date_to && (
-            <Link to={`/marcaciones?desde=${result.date_from}&hasta=${result.date_to}`} className="btn" style={{ marginTop: 16 }}>
+            <Link to={`/marcaciones?desde=${result.date_from}&hasta=${result.date_to}&local=${result.device.id}`} className="btn" style={{ marginTop: 16 }}>
               Ver marcaciones de este archivo
             </Link>
           )}
@@ -126,11 +134,12 @@ export function Import() {
             <thead>
               <tr>
                 <th>Archivo</th>
-                <th>Reloj</th>
+                <th>Local</th>
                 <th>Periodo</th>
                 <th className="num">Nuevas</th>
                 <th className="num">Dobles</th>
                 <th>Subido</th>
+                <th className="row-actions" />
               </tr>
             </thead>
             <tbody>
@@ -143,7 +152,9 @@ export function Import() {
                     </span>
                   </td>
                   <td>
-                    <span className="badge">{b.device.serial_number}</span>
+                    <span className="badge" title={`Reloj ${b.device.serial_number}`}>
+                      {localName(b.device)}
+                    </span>
                   </td>
                   <td className="mono">
                     {b.date_from} → {b.date_to}
@@ -154,6 +165,14 @@ export function Import() {
                     <div>{fmtDateTime(b.uploaded_at)}</div>
                     <div className="caption">{b.uploaded_by?.full_name}</div>
                   </td>
+                  <td className="num row-actions">
+                    <RowMenu
+                      actions={[
+                        { label: "Ver marcaciones", onClick: () => navigate(`/marcaciones?desde=${b.date_from}&hasta=${b.date_to}&local=${b.device.id}`) },
+                        { label: "Eliminar importación", danger: true, onClick: () => setDeleting(b) },
+                      ]}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -161,6 +180,26 @@ export function Import() {
           {history.data?.items.length === 0 && <div className="empty">Aún no hay importaciones.</div>}
         </div>
       </div>
+
+      {deleting && (
+        <ConfirmDelete
+          title="Eliminar importación"
+          path={`/attendance/imports/${deleting.id}`}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            setResult(null);
+            history.reload();
+            locales.reload();
+          }}
+        >
+          <p>
+            Se borrará <b>{deleting.original_filename}</b> (local {localName(deleting.device)}) y las {deleting.inserted} marcas que entraron con
+            este archivo.
+          </p>
+          <p className="caption">Las marcas que ya existían por un archivo anterior se conservan. Después puede volver a subir el archivo.</p>
+        </ConfirmDelete>
+      )}
     </div>
   );
 }

@@ -1,14 +1,19 @@
 import hashlib
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models import Device, Employee, ImportBatch, Punch, User
 from app.services import audit
+from app.services.excel import ExcelError, is_excel, parse_excel_punches
 from app.services.storage import Storage
 from app.services.zk_attlog import flag_double_taps, parse_attlog, serial_from_filename
+
+# Para reconocer el local de un archivo, al menos esta fracción de sus IDs debe coincidir con
+# las huellas de ese local en la planilla.
+LOCAL_MIN_MATCH = 0.6
 
 
 class AttendanceImportError(Exception):
@@ -26,6 +31,82 @@ def _get_or_create_device(db: Session, serial: str) -> Device:
     return device
 
 
+def known_locals(db: Session) -> list[str]:
+    """Locales conocidos: las columnas HUELLA de la planilla y los ya asignados a un reloj."""
+    keys = {k for fp in db.scalars(select(Employee.fingerprints)) for k in (fp or {})}
+    keys |= set(db.scalars(select(Device.fingerprint_key).where(Device.fingerprint_key.is_not(None))))
+    return sorted(keys)
+
+
+def detect_local(db: Session, badges: set[str]) -> str | None:
+    """El local cuyas huellas (planilla) coinciden con más IDs del archivo, si son mayoría clara."""
+    if not badges:
+        return None
+    counts: dict[str, int] = {}
+    for fp in db.scalars(select(Employee.fingerprints)):
+        for key, value in (fp or {}).items():
+            if str(value).strip() in badges:
+                counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        return None
+    best = max(counts, key=counts.get)
+    return best if counts[best] / len(badges) >= LOCAL_MIN_MATCH else None
+
+
+def link_unmapped_punches(db: Session) -> int:
+    """Pone nombre a las marcas sin empleado: por la huella del local del reloj (planilla) y, si
+    no, por el ID de reloj del empleado. Se llama tras importar y al crear o editar empleados."""
+    local_of = dict(db.execute(select(Device.id, Device.fingerprint_key)).tuples().all())
+    by_badge: dict[str, int] = {}
+    by_local: dict[str, dict[str, int]] = {}
+    for emp_id, badge, fingerprints in db.execute(select(Employee.id, Employee.badge_number, Employee.fingerprints)):
+        if badge:
+            by_badge[badge] = emp_id
+        for key, value in (fingerprints or {}).items():
+            by_local.setdefault(key, {})[str(value).strip()] = emp_id
+
+    targets: dict[int, list[int]] = {}
+    rows = db.execute(select(Punch.id, Punch.device_id, Punch.badge).where(Punch.employee_id.is_(None))).all()
+    for punch_id, device_id, badge in rows:
+        emp_id = by_local.get(local_of.get(device_id) or "", {}).get(badge) or by_badge.get(badge)
+        if emp_id:
+            targets.setdefault(emp_id, []).append(punch_id)
+    for emp_id, ids in targets.items():
+        db.execute(update(Punch).where(Punch.id.in_(ids)).values(employee_id=emp_id))
+    return sum(len(ids) for ids in targets.values())
+
+
+def _link_by_name(db: Session, device_id: int, names: dict[str, str]) -> None:
+    """Excel con nombres: un ID que sigue sin empleado se vincula si el nombre coincide con una
+    sola ficha; si esa ficha no tiene ID de reloj, se le asigna."""
+    from app.services.employee_roster import name_key
+
+    unmapped = set(
+        db.scalars(
+            select(Punch.badge).where(Punch.device_id == device_id, Punch.employee_id.is_(None)).distinct()
+        )
+    )
+    if not unmapped:
+        return
+    employees = db.scalars(select(Employee)).all()
+    keys = {e.id: name_key(e.full_name) for e in employees}
+    used = {e.badge_number for e in employees if e.badge_number}
+    for badge in unmapped & names.keys():
+        wanted = name_key(names[badge])
+        found = [e for e in employees if wanted and keys[e.id] == wanted]
+        if len(found) != 1:
+            continue
+        employee = found[0]
+        if not employee.badge_number and badge not in used:
+            employee.badge_number = badge
+            used.add(badge)
+        db.execute(
+            update(Punch)
+            .where(Punch.device_id == device_id, Punch.badge == badge, Punch.employee_id.is_(None))
+            .values(employee_id=employee.id)
+        )
+
+
 def recompute_double_taps(
     db: Session, device_id: int, badges: set[str], start: datetime, end: datetime
 ) -> None:
@@ -37,6 +118,7 @@ def recompute_double_taps(
         .where(
             Punch.device_id == device_id,
             Punch.badge.in_(badges),
+            Punch.deleted_at.is_(None),
             Punch.punched_at >= start - timedelta(days=1),
             Punch.punched_at <= end + timedelta(days=1),
         )
@@ -68,7 +150,10 @@ def import_attlog(
     storage: Storage,
     user: User,
     device_serial: str | None = None,
+    local: str | None = None,
 ) -> ImportBatch:
+    """Importa el attlog del reloj (.dat) o una exportación de marcaciones en Excel.
+    El local se toma del reloj ya conocido, del indicado por RRHH o se detecta por las huellas."""
     settings = get_settings()
     sha = hashlib.sha256(content).hexdigest()
 
@@ -76,39 +161,59 @@ def import_attlog(
     if previous is not None:
         raise AttendanceImportError("Este archivo ya fue importado", previous)
 
-    serial = (device_serial or serial_from_filename(filename) or "").strip().upper()
-    if not serial:
-        raise AttendanceImportError(
-            "No se pudo identificar el reloj. Indique el número de serie del equipo."
-        )
-
-    parsed = parse_attlog(content, settings.tz)
+    names: dict[str, str] = {}
+    excel = is_excel(content)
+    if excel:
+        try:
+            parsed, names = parse_excel_punches(content, settings.tz)
+        except ExcelError as exc:
+            raise AttendanceImportError(str(exc)) from exc
+    else:
+        parsed = parse_attlog(content, settings.tz)
     if not parsed.records:
         raise AttendanceImportError("El archivo no contiene marcaciones válidas")
 
-    device = _get_or_create_device(db, serial)
+    local = (local or "").strip() or None
+    serial = (device_serial or serial_from_filename(filename) or "").strip().upper()
+    device = db.scalar(select(Device).where(Device.serial_number == serial)) if serial else None
+    if device is None and not serial:
+        # Sin número de serie (p. ej. un Excel): el reloj es el del local indicado o detectado.
+        local = local or detect_local(db, {r.badge for r in parsed.records})
+        if not local:
+            raise AttendanceImportError(
+                "No se pudo identificar el local de este archivo. Indique de qué local es."
+            )
+        device = db.scalar(select(Device).where(Device.fingerprint_key == local).order_by(Device.id))
+        serial = device.serial_number if device else f"LOCAL-{local}".upper().replace(" ", "-")[:64]
+    device = device or _get_or_create_device(db, serial)
+    if local and device.fingerprint_key != local:
+        device.fingerprint_key = local
+    elif not device.fingerprint_key:
+        device.fingerprint_key = detect_local(db, {r.badge for r in parsed.records})
+    if device.fingerprint_key and device.name.startswith("Reloj "):
+        device.name = device.fingerprint_key
+
     first = min(r.punched_at for r in parsed.records)
     last = max(r.punched_at for r in parsed.records)
 
-    existing = set(
-        db.execute(
-            select(Punch.badge, Punch.punched_at).where(
-                Punch.device_id == device.id,
-                Punch.punched_at >= first,
-                Punch.punched_at <= last,
-            )
-        ).tuples().all()
-    )
+    # Se compara contra la hora original del reloj (también de marcas corregidas o eliminadas
+    # por RRHH), para que una descarga nueva no las vuelva a meter.
+    existing: set = set()
+    for badge, at, original in db.execute(
+        select(Punch.badge, Punch.punched_at, Punch.original_punched_at).where(
+            Punch.device_id == device.id,
+            or_(
+                Punch.punched_at.between(first, last),
+                Punch.original_punched_at.between(first, last),
+            ),
+        )
+    ):
+        existing.add((badge, original or at))
     new_records = [r for r in parsed.records if (r.badge, r.punched_at) not in existing]
 
-    employees_by_badge = dict(
-        db.execute(
-            select(Employee.badge_number, Employee.id).where(Employee.badge_number.is_not(None))
-        ).tuples().all()
-    )
-
+    ext = "xlsx" if content.startswith(b"PK") else "xls" if excel else "dat"
     storage_key = storage.save(
-        f"{serial}/{datetime.now(settings.tz):%Y/%m}/{sha}.dat", content
+        f"{serial}/{datetime.now(settings.tz):%Y/%m}/{sha}.{ext}", content
     )
     batch = ImportBatch(
         device_id=device.id,
@@ -120,7 +225,6 @@ def import_attlog(
         inserted=len(new_records),
         already_present=len(parsed.records) - len(new_records) + parsed.duplicate_lines,
         invalid_lines=len(parsed.errors),
-        unknown_badges=len({r.badge for r in parsed.records} - employees_by_badge.keys()),
         date_from=first.astimezone(settings.tz).date(),
         date_to=last.astimezone(settings.tz).date(),
     )
@@ -131,7 +235,6 @@ def import_attlog(
         Punch(
             device_id=device.id,
             badge=r.badge,
-            employee_id=employees_by_badge.get(r.badge),
             punched_at=r.punched_at,
             verify_mode=r.verify_mode,
             status_code=r.status_code,
@@ -141,7 +244,18 @@ def import_attlog(
         for r in new_records
     )
     db.flush()
+    link_unmapped_punches(db)
+    if names:
+        _link_by_name(db, device.id, names)
+    db.flush()
 
+    batch.unknown_badges = db.scalar(
+        select(func.count(func.distinct(Punch.badge))).where(
+            Punch.device_id == device.id,
+            Punch.employee_id.is_(None),
+            Punch.badge.in_({r.badge for r in parsed.records}),
+        )
+    )
     if new_records:
         recompute_double_taps(db, device.id, {r.badge for r in new_records}, first, last)
         batch.double_taps = db.scalar(
@@ -156,11 +270,39 @@ def import_attlog(
         "importar",
         "import_batch",
         batch.id,
-        {"archivo": filename, "reloj": serial, "insertadas": batch.inserted},
+        {"archivo": filename, "reloj": serial, "local": device.fingerprint_key, "insertadas": batch.inserted},
     )
     db.commit()
     db.refresh(batch)
     return batch
+
+
+def delete_import(db: Session, batch: ImportBatch, storage: Storage, user: User) -> int:
+    """Borra un archivo importado y las marcas que entraron con él (las que ya existían por un
+    archivo anterior se quedan). Así el mismo archivo se puede volver a subir."""
+    rows = db.execute(
+        select(Punch.badge, Punch.punched_at).where(Punch.import_batch_id == batch.id)
+    ).all()
+    db.execute(delete(Punch).where(Punch.import_batch_id == batch.id))
+    if rows:
+        times = [r.punched_at for r in rows]
+        recompute_double_taps(db, batch.device_id, {r.badge for r in rows}, min(times), max(times))
+    audit.record(
+        db,
+        user,
+        "eliminar",
+        "import_batch",
+        batch.id,
+        {"archivo": batch.original_filename, "marcas_borradas": len(rows)},
+    )
+    key = batch.storage_key
+    db.delete(batch)
+    db.commit()
+    try:
+        storage.delete(key)
+    except Exception:  # el registro ya se borró; un archivo huérfano no es grave
+        pass
+    return len(rows)
 
 
 def relink_badge(db: Session, employee_id: int, old_badge: str | None, new_badge: str | None):

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { IconLink, IconPlus } from "../components/Icons";
 import { RosterImport } from "../components/RosterImport";
+import { ConfirmDelete, RowMenu } from "../components/RowMenu";
 import { SectionBanner, TeamHeader, useCollapsedTeams } from "../components/TeamGroups";
 import { api, AREAS, DOCS, groupByTeam, type Area, type Department, type Employee, type EmployeeInput, type Page, type ShiftTemplate, type UnmappedBadge } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -25,11 +26,12 @@ export function Employees({ area }: { area: Area }) {
   const [status, setStatus] = useState("activo");
   const [editing, setEditing] = useState<Editing>(null);
   const [importing, setImporting] = useState(false);
+  const [deleting, setDeleting] = useState<Employee | null>(null);
   const showUnmapped = params.get("vincular") === "1";
   const teams = useCollapsedTeams(`empleados.${area}.teams-plegados`);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [assigning, setAssigning] = useState(false);
-  const COLS = canEdit ? 11 : 10;
+  const COLS = canEdit ? 12 : 10;
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(q), 250);
@@ -165,6 +167,7 @@ export function Employees({ area }: { area: Area }) {
                 <th>Huellas</th>
                 <th>Expediente</th>
                 <th>Estado</th>
+                {canEdit && <th className="row-actions" />}
               </tr>
             </thead>
             <tbody>
@@ -233,6 +236,18 @@ export function Employees({ area }: { area: Area }) {
                     <span className={`badge${e.status === "activo" ? " accent" : " danger"}`}>{e.status}</span>
                     {e.termination_note && <div className="caption" style={{ maxWidth: 180 }}>{e.termination_note}</div>}
                   </td>
+                  {canEdit && (
+                    <td className="num row-actions" onClick={(ev) => ev.stopPropagation()}>
+                      <RowMenu
+                        label={`Acciones de ${e.full_name}`}
+                        actions={[
+                          { label: "Ver ficha", onClick: () => navigate(`/empleados/${e.id}`) },
+                          { label: "Editar", onClick: () => setEditing({ employee: e }) },
+                          { label: "Eliminar empleado", danger: true, onClick: () => setDeleting(e) },
+                        ]}
+                      />
+                    </td>
+                  )}
                 </tr>
                 ))}
                 </Fragment>
@@ -256,6 +271,23 @@ export function Employees({ area }: { area: Area }) {
             setSelected(new Set());
           }}
         />
+      )}
+      {deleting && (
+        <ConfirmDelete
+          title="Eliminar empleado"
+          path={`/employees/${deleting.id}`}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            list.reload();
+          }}
+        >
+          <p>
+            Se eliminará la ficha de <b>{deleting.full_name}</b> ({deleting.code}) junto con sus turnos y constancias emitidas. Esto no se
+            puede deshacer.
+          </p>
+          <p className="caption">Sus marcas del reloj se conservan, pero quedan sin nombre. Si la persona solo dejó de trabajar, mejor edítela y márquela como inactiva.</p>
+        </ConfirmDelete>
       )}
       {importing && (
         <RosterImport
