@@ -64,7 +64,7 @@ export function Layout() {
         </div>
         <nav className="nav">
           {LINKS.filter((l) => can(...l.roles)).map(({ to, label, icon: Icon }) =>
-            to === "/empleados" ? (
+            to === "/empleados" || to === "/horarios" ? (
               <SectionNav key={to} base={to} label={label} icon={Icon} />
             ) : to === "/marcaciones" ? (
               <SectionNav key={to} base={to} label={label} icon={Icon} extra={[{ slug: UNMAPPED_SLUG, label: "Sin empleado" }]} />

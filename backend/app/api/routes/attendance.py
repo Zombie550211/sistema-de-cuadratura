@@ -14,6 +14,7 @@ from app.schemas import (
     DashboardSummary,
     DeviceOut,
     ImportBatchOut,
+    LatenessOut,
     LocalesOut,
     LocalOut,
     Page,
@@ -29,6 +30,7 @@ from app.services.attendance_import import (
     known_locals,
     recompute_double_taps,
 )
+from app.services.lateness import lateness
 from app.services.storage import get_storage
 from app.services.zk_attlog import normalize_badge
 
@@ -162,6 +164,15 @@ def list_punches(
         stmt.order_by(Punch.punched_at.desc(), Punch.badge).limit(limit).offset(offset)
     ).all()
     return Page(items=items, total=total)
+
+
+@router.get("/attendance/lateness", response_model=list[LatenessOut])
+def list_lateness(db: DB, _: Staff, date_from: date, date_to: date, area: AreaParam = None, employee_id: int | None = None):
+    """Llegadas tarde por día con turno (entrada vs. inicio del turno), acumuladas por quincena:
+    los primeros minutos que se perdonan no cuentan."""
+    if date_to < date_from or (date_to - date_from).days > 93:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rango de fechas inválido (máx. 3 meses)")
+    return [LatenessOut(**vars(d)) for d in lateness(db, date_from, date_to, area, employee_id)]
 
 
 def _active_punch(db: DB, punch_id: int) -> Punch:

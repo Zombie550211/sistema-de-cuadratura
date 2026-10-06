@@ -6,9 +6,11 @@ import { Modal } from "../components/Modal";
 import { useCollapsedTeams } from "../components/TeamGroups";
 import {
   api,
+  AREAS,
   DAY_OFF_LABEL,
   groupByTeam,
   SECTION_LABEL,
+  type Area,
   type Employee,
   type Page,
   type Punch,
@@ -47,7 +49,10 @@ function readableOn(hex: string) {
   return lum > 0.6 ? "var(--text)" : "var(--on-accent)";
 }
 
-export function Schedules() {
+/** Horarios de una sección (Administrativo, Operativo, Supervisores o Agentes de ventas), con el
+ *  mismo desglose que Empleados y Marcaciones. */
+export function Schedules({ area }: { area: Area }) {
+  const section = AREAS.find((a) => a.area === area)!.label;
   const { can } = useAuth();
   const canEdit = can("admin", "rrhh");
   const [start, setStart] = useState(() => weekStart(today()));
@@ -59,14 +64,14 @@ export function Schedules() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const teams = useCollapsedTeams("horarios.teams-plegados");
+  const teams = useCollapsedTeams(`horarios.${area}.teams-plegados`);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(start, i)), [start]);
   const day = days[dayIndex];
   const isToday = day === today();
   const isFuture = day > today();
 
-  const employees = useAsync(() => api.get<Page<Employee>>("/employees", { status: "activo", limit: 500 }), []);
+  const employees = useAsync(() => api.get<Page<Employee>>("/employees", { status: "activo", area, limit: 500 }), [area]);
   const templates = useAsync(() => api.get<ShiftTemplate[]>("/schedules/templates", { include_inactive: true }), []);
   const assignments = useAsync(() => api.get<ShiftAssignment[]>("/schedules/assignments", { date_from: days[0], date_to: days[6] }), [days]);
   const daysOff = useAsync(() => api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: days[0], date_to: days[6] }), [days]);
@@ -105,8 +110,7 @@ export function Schedules() {
     return map;
   }, [punches.data]);
 
-  // Solo agentes con team: el personal sin team (administración, IT, etc.) se asigna desde Empleados.
-  const allGroups = useMemo(() => groupByTeam((employees.data?.items ?? []).filter((e) => e.department)), [employees.data]);
+  const allGroups = useMemo(() => groupByTeam(employees.data?.items ?? []), [employees.data]);
   const q = query.trim().toLowerCase();
   const groups = allGroups
     .filter((g) => team === "all" || g.key === team)
@@ -226,7 +230,7 @@ export function Schedules() {
 
   return (
     <div className="page sch">
-      <div className="sch-kicker">Supervisión · Horarios de agentes</div>
+      <div className="sch-kicker">Horarios · {section}</div>
       <div className="page-head">
         <h1 className="sch-title">{fmtLongDate(day)}</h1>
         <div className="row">
@@ -277,7 +281,7 @@ export function Schedules() {
             </option>
           ))}
         </select>
-        <input className="input" style={{ width: 200 }} placeholder="Buscar agente o ID" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input className="input" style={{ width: 200 }} placeholder="Buscar persona o ID" value={query} onChange={(e) => setQuery(e.target.value)} />
       </div>
 
       <div className="sch-days">
@@ -310,7 +314,7 @@ export function Schedules() {
         <div className="sch-board">
           <div className="sch-grid sch-hist-row">
             <div className="sch-hist-label">
-              <b>Agentes en turno por hora</b>
+              <b>Personas en turno por hora</b>
               {thin.length > 0 && visible.length > 0 && (
                 <span className="sch-warn">
                   Menos de {MIN_COVERAGE}: {thin.map(hourLabel).join(", ")}
@@ -329,7 +333,7 @@ export function Schedules() {
           </div>
 
           <div className="sch-grid sch-head">
-            <span>Agente · marcación</span>
+            <span>Persona · marcación</span>
             <div className="sch-hours">
               {hours.map((h) => (
                 <span key={h}>{hourLabel(h)}</span>

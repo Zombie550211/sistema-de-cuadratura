@@ -4,9 +4,22 @@ import { useSearchParams } from "react-router-dom";
 import { IconChevronLeft, IconChevronRight } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RowMenu, type RowAction } from "../components/RowMenu";
-import { api, ApiError, AREAS, localName, type Area, type Employee, type ImportBatch, type Locales, type Page, type Punch } from "../lib/api";
+import {
+  api,
+  ApiError,
+  AREAS,
+  LATE_ALLOWANCE,
+  localName,
+  type Area,
+  type Employee,
+  type ImportBatch,
+  type Lateness,
+  type Locales,
+  type Page,
+  type Punch,
+} from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { addDays, fmtLongDate, fmtTimeSec, fmtWeek, localDate, today, weekStart } from "../lib/format";
+import { addDays, fmtLongDate, fmtMinutes, fmtTime, fmtTimeSec, fmtWeek, localDate, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 interface DayRow {
@@ -14,6 +27,7 @@ interface DayRow {
   date: string;
   badge: string;
   deviceId: number;
+  employeeId: number | null;
   name: string | null;
   code: string | null;
   punches: Punch[];
@@ -95,6 +109,13 @@ export function Punches({ area }: { area: Area | null }) {
     [from, to, deviceId, showDoubles, area],
   );
 
+  // Llegadas tarde de la semana (solo en las secciones con empleados).
+  const late = useAsync(
+    () => (area ? api.get<Lateness[]>("/attendance/lateness", { date_from: from, date_to: to, area }) : Promise.resolve([])),
+    [from, to, area],
+  );
+  const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
+
   function selectTab(id: number) {
     const next = new URLSearchParams(params);
     next.set("local", String(id));
@@ -105,6 +126,7 @@ export function Punches({ area }: { area: Area | null }) {
     setDialog(null);
     reload();
     locales.reload();
+    late.reload();
   }
 
   const rows = useMemo(() => {
@@ -118,6 +140,7 @@ export function Punches({ area }: { area: Area | null }) {
           date,
           badge: p.badge,
           deviceId: p.device_id,
+          employeeId: p.employee?.id ?? null,
           name: p.employee?.full_name ?? null,
           code: p.employee?.code ?? null,
           punches: [],
@@ -253,6 +276,7 @@ export function Punches({ area }: { area: Area | null }) {
                   <th>Agente</th>
                   <th>Día</th>
                   <th>Hora de entrada</th>
+                  {area && <th title={`Entrada vs. inicio del turno. Se perdonan ${LATE_ALLOWANCE} min por quincena.`}>Llegada tarde</th>}
                   <th>Huella</th>
                   {canEdit && <th className="row-actions" />}
                 </tr>
@@ -282,6 +306,7 @@ export function Punches({ area }: { area: Area | null }) {
                         </div>
                       )}
                     </td>
+                    {area && <LateCell late={r.employeeId ? lateByKey.get(`${r.employeeId}|${r.date}`) : undefined} />}
                     <td>
                       <span className="badge accent" title="N° de huella (ID en el reloj)">
                         {r.badge}
@@ -344,6 +369,31 @@ export function Punches({ area }: { area: Area | null }) {
       {dialog?.kind === "link" && <LinkBadge row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
       {dialog?.kind === "delete" && <DeleteDay row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
     </div>
+  );
+}
+
+/** Llegada tarde del día: minutos tarde contra el turno y cuánto de eso ya cuenta, porque en la
+ *  quincena se perdonan los primeros LATE_ALLOWANCE minutos acumulados. */
+function LateCell({ late }: { late?: Lateness }) {
+  if (!late) return <td className="nowrap"><span className="muted" title="No tiene turno asignado en Horarios este día">Sin turno</span></td>;
+  const turno = `Turno desde las ${fmtTime(late.shift_start)}`;
+  if (!late.late_minutes) {
+    return (
+      <td className="nowrap" title={turno}>
+        <span className="caption">A tiempo</span>
+      </td>
+    );
+  }
+  const counted = late.counted_minutes > 0;
+  return (
+    <td className="nowrap" title={`${turno}. Acumulado en la quincena: ${fmtMinutes(late.quincena_minutes)} (se perdonan ${LATE_ALLOWANCE}min).`}>
+      <span className={`badge${counted ? " danger" : ""}`}>{fmtMinutes(late.late_minutes)}</span>
+      <div className="caption">
+        {counted
+          ? `${fmtMinutes(late.counted_minutes)} cuentan como tarde`
+          : `Dentro de los ${LATE_ALLOWANCE}min (${late.quincena_minutes}/${LATE_ALLOWANCE})`}
+      </div>
+    </td>
   );
 }
 

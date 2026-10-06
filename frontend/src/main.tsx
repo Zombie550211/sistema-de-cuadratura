@@ -75,7 +75,10 @@ function App() {
         ))}
         <Route path={`marcaciones/${UNMAPPED_SLUG}`} element={<Punches key="sin" area={null} />} />
         <Route path="importar" element={<Guard roles={["admin", "rrhh"]}><Import /></Guard>} />
-        <Route path="horarios" element={<Guard roles={STAFF}><Schedules /></Guard>} />
+        <Route path="horarios" element={<KeepQuery to={`/horarios/${AREAS.find((a) => a.area === "ventas")!.slug}`} />} />
+        {AREAS.map((a) => (
+          <Route key={a.slug} path={`horarios/${a.slug}`} element={<Guard roles={STAFF}><Schedules key={a.area} area={a.area} /></Guard>} />
+        ))}
         <Route path="empleados" element={<Navigate to={`/empleados/${AREAS[0].slug}`} replace />} />
         {AREAS.map((a) => (
           <Route key={a.slug} path={`empleados/${a.slug}`} element={<Guard roles={STAFF}><Employees key={a.area} area={a.area} /></Guard>} />

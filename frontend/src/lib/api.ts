@@ -185,6 +185,22 @@ export interface Punch {
   employee: EmployeeBrief | null;
 }
 
+/** Llegada tarde de un día con turno: entrada vs. inicio del turno, acumulada por quincena. */
+export interface Lateness {
+  employee_id: number;
+  date: string;
+  shift_start: string;
+  check_in: string | null;
+  late_minutes: number;
+  /** Minutos tarde acumulados en la quincena hasta ese día. */
+  quincena_minutes: number;
+  /** Minutos de ese día que ya cuentan (pasados los 15 perdonados por quincena). */
+  counted_minutes: number;
+}
+
+/** Minutos de llegada tarde que se perdonan por quincena. */
+export const LATE_ALLOWANCE = 15;
+
 export interface UnmappedBadge {
   badge: string;
   punches: number;

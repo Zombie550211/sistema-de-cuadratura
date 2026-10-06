@@ -388,6 +388,16 @@ class BadgeLinkIn(BaseModel):
     employee_id: int
 
 
+class LatenessOut(BaseModel):
+    employee_id: int
+    date: date
+    shift_start: datetime
+    check_in: datetime | None
+    late_minutes: int
+    quincena_minutes: int
+    counted_minutes: int
+
+
 class ExcelTextOut(BaseModel):
     text: str
 

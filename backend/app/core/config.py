@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     timezone: str = "America/El_Salvador"
     # Marcas del mismo empleado dentro de esta ventana se consideran doble marca.
     double_tap_seconds: int = 120
+    # Minutos de llegada tarde que se perdonan por quincena; lo que pase de ahí cuenta.
+    late_allowance_minutes: int = 15
 
     storage_backend: str = "local"  # local | s3
     storage_local_dir: str = "./storage"

@@ -53,6 +53,14 @@ export function fmtWeek(monday: string): string {
   return `${short(monday)} – ${short(sunday)} ${sunday.slice(0, 4)}`;
 }
 
+/** Minutos como duración exacta: "25min", "1h", "1h 30min". */
+export function fmtMinutes(total: number): string {
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (!h) return `${m}min`;
+  return m ? `${h}h ${m}min` : `${h}h`;
+}
+
 /** Lunes de la semana que contiene la fecha. */
 export function weekStart(ymd: string): string {
   const dow = new Date(`${ymd}T00:00:00Z`).getUTCDay();
