@@ -103,6 +103,11 @@ export function Import() {
             <Cell label="Dobles marcas" value={result.double_taps} />
             <Cell label="Líneas inválidas" value={result.invalid_lines} />
           </div>
+          {result.date_from && result.date_to && (
+            <Link to={`/marcaciones?desde=${result.date_from}&hasta=${result.date_to}`} className="btn" style={{ marginTop: 16 }}>
+              Ver marcaciones de este archivo
+            </Link>
+          )}
           {result.unknown_badges > 0 && (
             <Link to="/empleados/agentes?vincular=1" className="alert warn" style={{ display: "block", marginTop: 16 }}>
               {result.unknown_badges} IDs del reloj no están vinculados a ningún empleado. Clic aquí para vincularlos.
