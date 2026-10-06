@@ -234,12 +234,22 @@ def reschedule(assignment_id: int, data: ShiftUpdateIn, db: DB, user: HR):
 
 
 @router.get("/days-off", response_model=list[ShiftDayOffOut])
-def list_days_off(db: DB, _: Staff, date_from: date, date_to: date):
-    if date_to < date_from or (date_to - date_from).days > 93:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rango de fechas inválido (máx. 3 meses)")
-    return db.scalars(
-        select(ShiftDayOff).where(ShiftDayOff.work_date >= date_from, ShiftDayOff.work_date <= date_to).order_by(ShiftDayOff.work_date)
-    ).all()
+def list_days_off(
+    db: DB,
+    _: Staff,
+    date_from: date,
+    date_to: date,
+    kind: Annotated[str | None, Query(pattern="^(libre|vacacion|compensatorio)$")] = None,
+):
+    """Días sin turno fijados por RRHH. Filtrando por tipo (vacación o compensatorio) se puede
+    pedir hasta un año completo, para las secciones de Vacaciones y Compensatorios."""
+    max_days = 366 if kind else 93
+    if date_to < date_from or (date_to - date_from).days > max_days:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rango de fechas inválido")
+    stmt = select(ShiftDayOff).where(ShiftDayOff.work_date >= date_from, ShiftDayOff.work_date <= date_to)
+    if kind:
+        stmt = stmt.where(ShiftDayOff.kind == kind)
+    return db.scalars(stmt.order_by(ShiftDayOff.work_date)).all()
 
 
 @router.post("/days-off", response_model=ShiftDayOffOut, status_code=status.HTTP_201_CREATED)

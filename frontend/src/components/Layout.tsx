@@ -4,7 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { AREAS, UNMAPPED_SLUG, type Role } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ROLE_LABEL } from "../lib/format";
-import { IconCalendar, IconChevronDown, IconClock, IconHome, IconLink, IconLogout, IconShield, IconUpload, IconUsers } from "./Icons";
+import { IconCalendar, IconChevronDown, IconClock, IconHome, IconLink, IconLogout, IconRepeat, IconShield, IconSun, IconUpload, IconUsers } from "./Icons";
 import { LiveClock } from "./LiveClock";
 
 const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }[] = [
@@ -12,6 +12,8 @@ const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }
   { to: "/marcaciones", label: "Marcaciones", icon: IconClock, roles: ["admin", "rrhh"] },
   { to: "/importar", label: "Importar reloj", icon: IconUpload, roles: ["admin", "rrhh"] },
   { to: "/horarios", label: "Horarios", icon: IconCalendar, roles: ["admin", "rrhh"] },
+  { to: "/vacaciones", label: "Días de vacación", icon: IconSun, roles: ["admin", "rrhh"] },
+  { to: "/compensatorios", label: "Días compensatorio", icon: IconRepeat, roles: ["admin", "rrhh"] },
   { to: "/empleados", label: "Empleados", icon: IconUsers, roles: ["admin", "rrhh"] },
   { to: "/integraciones", label: "Integración CRM", icon: IconLink, roles: ["admin", "rrhh"] },
   { to: "/usuarios", label: "Usuarios", icon: IconShield, roles: ["admin"] },
@@ -64,7 +66,7 @@ export function Layout() {
         </div>
         <nav className="nav">
           {LINKS.filter((l) => can(...l.roles)).map(({ to, label, icon: Icon }) =>
-            to === "/empleados" || to === "/horarios" ? (
+            ["/empleados", "/horarios", "/vacaciones", "/compensatorios"].includes(to) ? (
               <SectionNav key={to} base={to} label={label} icon={Icon} />
             ) : to === "/marcaciones" ? (
               <SectionNav key={to} base={to} label={label} icon={Icon} extra={[{ slug: UNMAPPED_SLUG, label: "Sin empleado" }]} />

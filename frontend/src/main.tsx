@@ -18,6 +18,7 @@ import { Employees } from "./pages/Employees";
 import { Import } from "./pages/Import";
 import { Integrations } from "./pages/Integrations";
 import { Login } from "./pages/Login";
+import { Leave } from "./pages/Leave";
 import { Punches } from "./pages/Punches";
 import { Schedules } from "./pages/Schedules";
 import { Users } from "./pages/Users";
@@ -79,6 +80,17 @@ function App() {
         {AREAS.map((a) => (
           <Route key={a.slug} path={`horarios/${a.slug}`} element={<Guard roles={STAFF}><Schedules key={a.area} area={a.area} /></Guard>} />
         ))}
+        {(
+          [
+            ["vacaciones", "vacacion"],
+            ["compensatorios", "compensatorio"],
+          ] as const
+        ).map(([base, kind]) => [
+          <Route key={base} path={base} element={<Navigate to={`/${base}/${AREAS[0].slug}`} replace />} />,
+          ...AREAS.map((a) => (
+            <Route key={`${base}-${a.slug}`} path={`${base}/${a.slug}`} element={<Guard roles={STAFF}><Leave key={`${kind}-${a.area}`} kind={kind} area={a.area} /></Guard>} />
+          )),
+        ])}
         <Route path="empleados" element={<Navigate to={`/empleados/${AREAS[0].slug}`} replace />} />
         {AREAS.map((a) => (
           <Route key={a.slug} path={`empleados/${a.slug}`} element={<Guard roles={STAFF}><Employees key={a.area} area={a.area} /></Guard>} />

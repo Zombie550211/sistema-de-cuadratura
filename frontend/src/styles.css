@@ -591,3 +591,5 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .stats.six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .stat-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
 @media (max-width: 900px) { .stats.six { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.chip-x { display: inline-grid; place-items: center; margin-left: 4px; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; opacity: 0.6; }
+.chip-x:hover { opacity: 1; }
