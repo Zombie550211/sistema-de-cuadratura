@@ -580,7 +580,7 @@ function VacationPeriodsModal({
   );
 }
 
-/** Quita un tramo de días: cada día vuelve a quedar sin turno (el CRM lo puede volver a llenar). */
+/** Quita un tramo de días: cada día vuelve a quedar sin turno (también en el CRM). */
 function RemoveRange({ employee, range, noun, onClose, onDone }: { employee: Employee; range: Range; noun: string; onClose: () => void; onDone: () => void }) {
   const [rest, ...others] = range.days;
   return (

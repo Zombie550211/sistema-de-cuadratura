@@ -79,8 +79,9 @@ Límites por envío: 3000 agentes, un turno por agente por día y un máximo de 
 
 ### Reglas al aplicar
 
-1. **Reemplazo por periodo:** para cada agente enviado, sus horarios que llegaron del CRM dentro de
-   `date_from`–`date_to` se reemplazan por los de este envío. Una fecha que no se envía, o que llega
+1. **Reemplazo por periodo:** para cada agente enviado, su horario dentro de
+   `date_from`–`date_to` queda como el de este envío (también los días que RRHH había cambiado
+   aquí: esos cambios ya se le devolvieron al CRM, ver "Sincronización de vuelta"). Una fecha que no se envía, o que llega
    con `rest_day: true`, queda libre. Reenviar el mismo contenido no duplica nada.
 2. **Agentes que no vienen en el envío:**
    - Con `roster_complete: false` (valor por defecto) no se tocan. Sirve para reenviar solo a
@@ -91,8 +92,9 @@ Límites por envío: 3000 agentes, un turno por agente por día y un máximo de 
      `agents_released` con cuántos agentes se liberaron.
    - Use `true` solo cuando el envío contiene a todos los agentes que deben tener horario ese
      periodo; un envío parcial con `true` le quitaría los turnos a los demás.
-3. **Ajustes manuales de RRHH:** si RRHH cambió un día a mano en el sistema de cuadratura, ese día
-   no se sobrescribe. Se devuelve como `conflicto` con la fecha afectada.
+3. **Cambios de RRHH:** un día que RRHH cambió en Cuadratura y que aún no llegó al CRM no se toca.
+   Una vacación o un compensatorio de RRHH no se pisa con un turno: se devuelve como `conflicto`
+   con la fecha y se le vuelve a enviar al CRM como descanso.
 4. **Identificación del agente:** primero por `crm_agent_id`. Si no existe, por `badge_number` y
    después por nombre entre los empleados que aún no tienen ID de CRM; al encontrarlo se le guarda
    el `crm_agent_id`. Si no está en Empleados, ese agente devuelve `error` ("no está en
@@ -144,6 +146,29 @@ Límites por envío: 3000 agentes, un turno por agente por día y un máximo de 
 Si se reenvía la misma `Idempotency-Key`, el sistema devuelve el resultado original sin volver a
 aplicar nada, así que se puede reintentar sin miedo después de un timeout. Use una clave distinta
 para cada envío nuevo, por ejemplo `crm-2026-W41-1` y, si hay una corrección, `crm-2026-W41-2`.
+
+## Sincronización de vuelta (Cuadratura → CRM)
+
+Horarios del CRM y de Cuadratura deben ser iguales. Cada cambio que RRHH hace en Cuadratura (asignar,
+reagendar o quitar un turno, dar un día libre, una vacación o un compensatorio) se envía al CRM:
+
+```
+POST {CRM_URL}/api/horarios/desde-cuadratura
+X-API-Key: <CRM_API_KEY de Cuadratura = CUADRATURA_ENTRADA_KEY del CRM>
+
+{"changes": [
+  {"crm_agent_id": "152", "date": "2026-10-12", "start": "08:00", "end": "17:00", "break_minutes": 60, "notes": null},
+  {"crm_agent_id": "152", "date": "2026-10-13", "rest_day": true, "notes": "Vacación"},
+  {"crm_agent_id": "152", "date": "2026-10-14", "clear": true}
+]}
+```
+
+- Cada cambio reemplaza ese día del agente en el CRM; `clear` lo deja vacío (libre).
+- Los cambios salen de una cola (`crm_outbox`): se envían al guardar y, si el CRM no responde, se
+  reintentan cada 5 minutos. Mientras un día está en la cola, el envío del CRM no lo pisa.
+- Solo viajan los empleados con ID de CRM.
+- Configuración en el `.env` de Cuadratura: `CRM_URL` y `CRM_API_KEY`. Sin ellas no se envía nada
+  (y los cambios de RRHH quedan en la cola hasta que se configure).
 
 ## Calendario recomendado
 

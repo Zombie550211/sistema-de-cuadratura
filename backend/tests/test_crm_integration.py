@@ -99,7 +99,17 @@ def test_resend_replaces_week_without_duplicates(crm):
     assert (body["shifts_created"], body["shifts_updated"], body["shifts_removed"]) == (0, 0, 0)
 
 
-def test_manual_schedule_is_not_overwritten(crm):
+def _hours(client, day):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    rows = client.get("/api/schedules/assignments", params={"date_from": day, "date_to": day}).json()
+    return [(r["source"], datetime.fromisoformat(r["start_at"]).astimezone(ZoneInfo("America/El_Salvador")).strftime("%H:%M")) for r in rows]
+
+
+def test_rrhh_change_waits_for_crm_then_crm_wins(crm, db):
+    from app.models import CrmOutbox
+
     client, headers = crm
     _hire(client)
     emp_id = _send(client, headers, [_agent()]).json()["agents"][0]["employee_id"]
@@ -108,12 +118,92 @@ def test_manual_schedule_is_not_overwritten(crm):
         json={"employee_ids": [emp_id], "date_from": "2026-10-05", "date_to": "2026-10-05",
               "start_time": "10:00", "end_time": "19:00", "overwrite": True},
     )
+    # Sin CRM_URL el cambio queda en la cola: el envío del CRM no lo pisa.
+    assert _send(client, headers, [_agent()]).json()["status"] == "ok"
+    assert _hours(client, "2026-10-05") == [("manual", "10:00")]
+
+    # Ya entregado al CRM: si el CRM manda otra cosa, gana el CRM (cambió después).
+    db.query(CrmOutbox).delete()
+    db.commit()
+    _send(client, headers, [_agent()])
+    assert _hours(client, "2026-10-05") == [("crm", "08:00")]
+
+
+def test_vacation_is_not_overwritten_by_crm(crm, db):
+    from app.models import CrmOutbox
+
+    client, headers = crm
+    _hire(client)
+    emp_id = _send(client, headers, [_agent()]).json()["agents"][0]["employee_id"]
+    client.post("/api/schedules/days-off/bulk", json={
+        "employee_ids": [emp_id], "date_from": "2026-10-05", "date_to": "2026-10-05", "weekdays": [0], "kind": "vacacion",
+    })
+    db.query(CrmOutbox).delete()  # ya entregada al CRM, pero el CRM volvió a poner turno
+    db.commit()
     body = _send(client, headers, [_agent()]).json()
-    assert body["status"] == "parcial"
-    assert body["agents"][0]["status"] == "conflicto"
     assert body["agents"][0]["conflict_dates"] == ["2026-10-05"]
-    monday = client.get("/api/schedules/assignments", params={"date_from": "2026-10-05", "date_to": "2026-10-05"}).json()
-    assert monday[0]["source"] == "manual" and monday[0]["start_at"].startswith("2026-10-05T16:00")
+    assert _hours(client, "2026-10-05") == []
+    assert db.query(CrmOutbox).count() == 1  # se le vuelve a mandar la vacación al CRM
+
+
+def test_rrhh_changes_are_pushed_to_crm(crm, db, monkeypatch):
+    import httpx
+
+    from app.core.config import get_settings
+    from app.models import CrmOutbox
+
+    client, headers = crm
+    _hire(client)
+    emp_id = _send(client, headers, [_agent()]).json()["agents"][0]["employee_id"]
+    sent = []
+
+    def fake_post(url, json, headers, timeout):
+        sent.append((url, headers["X-API-Key"], json["changes"]))
+        return httpx.Response(200, json={"success": True, "aplicados": len(json["changes"]), "errores": []}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(get_settings(), "crm_url", "http://crm.local/")
+    monkeypatch.setattr(get_settings(), "crm_api_key", "clave")
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    client.post("/api/schedules/days-off/bulk", json={
+        "employee_ids": [emp_id], "date_from": "2026-10-08", "date_to": "2026-10-08", "weekdays": [3], "kind": "compensatorio",
+    })
+    monday = client.get("/api/schedules/assignments", params={"date_from": "2026-10-05", "date_to": "2026-10-05"}).json()[0]
+    client.put(f"/api/schedules/assignments/{monday['id']}", json={
+        "work_date": "2026-10-05", "start_time": "09:00", "end_time": "18:00", "break_minutes": 60, "tolerance_minutes": 5,
+    })
+    client.delete(f"/api/schedules/assignments/{monday['id']}")
+
+    changes = [c for _, _, batch in sent for c in batch]
+    assert sent[0][0] == "http://crm.local/api/horarios/desde-cuadratura" and sent[0][1] == "clave"
+    assert {"crm_agent_id": "A-100", "date": "2026-10-08", "rest_day": True, "notes": "Compensatorio"} in changes
+    assert {"crm_agent_id": "A-100", "date": "2026-10-05", "start": "09:00", "end": "18:00", "break_minutes": 60, "notes": None} in changes
+    assert changes[-1] == {"crm_agent_id": "A-100", "date": "2026-10-05", "clear": True}
+    assert db.query(CrmOutbox).count() == 0
+
+
+def test_failed_push_stays_queued(crm, db, monkeypatch):
+    import httpx
+
+    from app.core.config import get_settings
+    from app.models import CrmOutbox
+
+    client, headers = crm
+    _hire(client)
+    emp_id = _send(client, headers, [_agent()]).json()["agents"][0]["employee_id"]
+
+    def down(url, **kw):
+        raise httpx.ConnectError("sin conexión")
+
+    monkeypatch.setattr(get_settings(), "crm_url", "http://crm.local")
+    monkeypatch.setattr(get_settings(), "crm_api_key", "clave")
+    monkeypatch.setattr(httpx, "post", down)
+    client.post("/api/schedules/days-off/bulk", json={
+        "employee_ids": [emp_id], "date_from": "2026-10-09", "date_to": "2026-10-09", "weekdays": [4], "kind": "vacacion",
+    })
+    db.expire_all()
+    item = db.query(CrmOutbox).one()
+    assert item.attempts == 1 and "sin conexión" in item.last_error
 
 
 def test_existing_employee_matched_by_badge(crm):
@@ -298,7 +388,9 @@ def _local(iso):
     return datetime.fromisoformat(iso).astimezone(ZoneInfo("America/El_Salvador")).strftime("%Y-%m-%d %H:%M")
 
 
-def test_rescheduled_shift_is_kept_when_crm_resends(crm):
+def test_rescheduled_shift_waits_for_crm_then_crm_wins(crm, db):
+    from app.models import CrmOutbox
+
     client, headers = crm
     _hire(client)
     _send(client, headers, [_agent()])
@@ -313,17 +405,19 @@ def test_rescheduled_shift_is_kept_when_crm_resends(crm):
     days_off = client.get("/api/schedules/days-off", params=WEEK).json()
     assert [d["work_date"] for d in days_off] == ["2026-10-05"]
 
-    # el CRM reenvía la semana igual: no vuelve a poner el lunes ni toca el miércoles
+    # mientras el cambio no llega al CRM (está en la cola), su reenvío no lo pisa
     body = _send(client, headers, [_agent()]).json()
-    assert body["agents"][0]["conflict_dates"] == ["2026-10-05"]
+    assert body["agents"][0]["conflict_dates"] == []
     shifts = client.get("/api/schedules/assignments", params=WEEK).json()
     assert [(s["work_date"], s["source"]) for s in shifts] == [("2026-10-06", "crm"), ("2026-10-07", "manual")]
 
-    # quitar el día libre deja que el CRM vuelva a llenar el lunes
-    assert client.delete(f"/api/schedules/days-off/{days_off[0]['id']}").status_code == 204
+    # ya entregado, si el CRM manda la semana como antes es porque allá se cambió después: gana el CRM
+    db.query(CrmOutbox).delete()
+    db.commit()
     _send(client, headers, [_agent()])
     shifts = client.get("/api/schedules/assignments", params=WEEK).json()
-    assert [s["work_date"] for s in shifts] == ["2026-10-05", "2026-10-06", "2026-10-07"]
+    assert [(s["work_date"], s["source"]) for s in shifts] == [("2026-10-05", "crm"), ("2026-10-06", "crm")]
+    assert client.get("/api/schedules/days-off", params=WEEK).json() == []
 
 
 def test_day_off_removes_crm_shift_for_good(crm):

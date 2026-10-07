@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
 from app.models import Role, User
+from app.services import crm_push
 
 log = logging.getLogger("asistencia")
 
@@ -34,10 +36,22 @@ def ensure_first_admin() -> None:
         log.warning("Administrador inicial '%s' creado", settings.first_admin_username)
 
 
+async def retry_crm_push() -> None:
+    """Reintenta cada 5 min enviar al CRM los cambios de horario que no llegaron."""
+    while True:
+        await asyncio.sleep(300)
+        await asyncio.to_thread(crm_push.flush_in_background)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     ensure_first_admin()
+    task = asyncio.create_task(retry_crm_push()) if crm_push.configured() else None
     yield
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 settings = get_settings()

@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
@@ -26,7 +26,7 @@ from app.schemas import (
     VacationPeriodOut,
     VacationStatusOut,
 )
-from app.services import audit
+from app.services import audit, crm_push
 from app.services.compensatory import compensatory_status, data_years, ensure_years
 from app.services.vacations import PeriodRecord, anniversary, completed_years, vacation_status
 
@@ -92,7 +92,7 @@ def list_assignments(
 
 
 @router.post("/assignments/bulk", response_model=BulkAssignOut)
-def bulk_assign(data: BulkAssignIn, db: DB, user: HR):
+def bulk_assign(data: BulkAssignIn, db: DB, user: HR, background: BackgroundTasks):
     tz = get_settings().tz
     start_time, end_time = data.start_time, data.end_time
     break_minutes, tolerance = data.break_minutes, data.tolerance_minutes
@@ -135,6 +135,7 @@ def bulk_assign(data: BulkAssignIn, db: DB, user: HR):
     }
 
     created = updated = skipped = 0
+    touched: list[tuple[int, date]] = []
     day = data.date_from
     while day <= data.date_to:
         if day.weekday() in data.weekdays:
@@ -165,6 +166,7 @@ def bulk_assign(data: BulkAssignIn, db: DB, user: HR):
                 else:
                     skipped += 1
                     continue
+                touched.append((emp_id, day))
                 if off := days_off.get((emp_id, day)):  # asignar turno quita el día libre
                     db.delete(off)
         day += timedelta(days=1)
@@ -177,7 +179,9 @@ def bulk_assign(data: BulkAssignIn, db: DB, user: HR):
         None,
         {**data.model_dump(mode="json"), "creados": created, "actualizados": updated},
     )
+    crm_push.queue(db, touched)
     db.commit()
+    background.add_task(crm_push.flush_in_background)
     return BulkAssignOut(created=created, updated=updated, skipped=skipped)
 
 
@@ -194,8 +198,8 @@ def _day_off(db: DB, employee_id: int, day: date, user, notes: str | None = None
 
 
 @router.put("/assignments/{assignment_id}", response_model=ShiftAssignmentOut)
-def reschedule(assignment_id: int, data: ShiftUpdateIn, db: DB, user: HR):
-    """Cambia la fecha y/o las horas de un turno. Queda como horario manual: el CRM ya no lo pisa."""
+def reschedule(assignment_id: int, data: ShiftUpdateIn, db: DB, user: HR, background: BackgroundTasks):
+    """Cambia la fecha y/o las horas de un turno; el cambio se devuelve al CRM."""
     assignment = db.get(ShiftAssignment, assignment_id)
     if assignment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Horario no encontrado")
@@ -236,7 +240,9 @@ def reschedule(assignment_id: int, data: ShiftUpdateIn, db: DB, user: HR):
             "despues": {"fecha": data.work_date.isoformat(), "inicio": start_at.isoformat(), "fin": end_at.isoformat()},
         },
     )
+    crm_push.queue(db, [(assignment.employee_id, old_date), (assignment.employee_id, data.work_date)])
     db.commit()
+    background.add_task(crm_push.flush_in_background)
     db.refresh(assignment)
     return assignment
 
@@ -364,7 +370,7 @@ def list_compensatory(db: DB, _: Staff, area: Annotated[str | None, Query(max_le
 
 
 @router.post("/days-off", response_model=ShiftDayOffOut, status_code=status.HTTP_201_CREATED)
-def set_day_off(data: ShiftDayOffIn, db: DB, user: HR):
+def set_day_off(data: ShiftDayOffIn, db: DB, user: HR, background: BackgroundTasks):
     """Da el día libre: quita el turno de ese día (si hay) y el CRM ya no lo vuelve a poner."""
     if db.get(Employee, data.employee_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
@@ -388,12 +394,14 @@ def set_day_off(data: ShiftDayOffIn, db: DB, user: HR):
             "turno_quitado": f"{removed.start_at.isoformat()} – {removed.end_at.isoformat()}" if removed else None,
         },
     )
+    crm_push.queue(db, [(data.employee_id, data.work_date)])
     db.commit()
+    background.add_task(crm_push.flush_in_background)
     return off
 
 
 @router.post("/days-off/bulk", response_model=LeaveBulkOut)
-def assign_leave(data: LeaveBulkIn, db: DB, user: HR):
+def assign_leave(data: LeaveBulkIn, db: DB, user: HR, background: BackgroundTasks):
     """Vacación o compensatorio en un rango: quita el turno de esos días y el CRM ya no lo pone."""
     employee_ids = set(data.employee_ids)
     found = set(db.scalars(select(Employee.id).where(Employee.id.in_(employee_ids))).all())
@@ -415,23 +423,27 @@ def assign_leave(data: LeaveBulkIn, db: DB, user: HR):
         db, user, data.kind, "shift_day_off", None,
         {**data.model_dump(mode="json"), "dias": len(dates), "turnos_quitados": removed},
     )
+    crm_push.queue(db, [(e, d) for e in employee_ids for d in dates])
     db.commit()
+    background.add_task(crm_push.flush_in_background)
     return LeaveBulkOut(days=len(dates) * len(employee_ids), shifts_removed=removed)
 
 
 @router.delete("/days-off/{day_off_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_day_off(day_off_id: int, db: DB, user: HR):
-    """Quita el día libre: el día queda sin turno y el próximo envío del CRM puede volver a llenarlo."""
+def delete_day_off(day_off_id: int, db: DB, user: HR, background: BackgroundTasks):
+    """Quita el día libre: el día queda sin turno (también en el CRM)."""
     off = db.get(ShiftDayOff, day_off_id)
     if off is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Día libre no encontrado")
     audit.record(db, user, "eliminar", "shift_day_off", off.id, {"empleado": off.employee_id, "fecha": off.work_date.isoformat()})
+    crm_push.queue(db, [(off.employee_id, off.work_date)])
     db.delete(off)
     db.commit()
+    background.add_task(crm_push.flush_in_background)
 
 
 @router.delete("/assignments/{assignment_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_assignment(assignment_id: int, db: DB, user: HR):
+def delete_assignment(assignment_id: int, db: DB, user: HR, background: BackgroundTasks):
     assignment = db.get(ShiftAssignment, assignment_id)
     if assignment is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Horario no encontrado")
@@ -448,5 +460,7 @@ def delete_assignment(assignment_id: int, db: DB, user: HR):
             "fin": assignment.end_at.isoformat(),
         },
     )
+    crm_push.queue(db, [(assignment.employee_id, assignment.work_date)])
     db.delete(assignment)
     db.commit()
+    background.add_task(crm_push.flush_in_background)

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -20,7 +20,7 @@ from app.schemas.integration import (
     SyncOut,
     SyncResult,
 )
-from app.services import audit
+from app.services import audit, crm_push
 from app.services.crm_sync import apply_schedules
 
 router = APIRouter(prefix="/integrations", tags=["integraciones"])
@@ -40,10 +40,13 @@ def crm_schedules(
     payload: CrmSchedulePayload,
     db: DB,
     client: ApiClientDep,
+    background: BackgroundTasks,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=128)] = None,
 ):
     """Recibe los horarios de los agentes para un periodo (normalmente la semana siguiente)."""
-    return apply_schedules(db, payload, client, idempotency_key)
+    result = apply_schedules(db, payload, client, idempotency_key)
+    background.add_task(crm_push.flush_in_background)  # vacaciones/compensatorios en conflicto
+    return result
 
 
 # ---------- Administración (usuarios de la app) ----------

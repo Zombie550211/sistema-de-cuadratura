@@ -10,10 +10,13 @@ CRM solo manda horarios. Reglas:
 - El CRM no cambia los datos de la ficha (nombre, fecha de ingreso, ID de reloj). El ID de reloj
   que manda solo se usa para encontrar al empleado, o se guarda si la ficha aún no tiene uno.
 - El team sí lo manda el CRM ("MIGUEL NUÑEZ" → "Miguel Nuñez").
-- Dentro del periodo enviado, los horarios con origen 'crm' del agente se reemplazan por los del envío
-  (una fecha sin turno o con rest_day=true queda libre).
-- Un horario cargado a mano por RRHH ('manual') nunca se pisa, ni se pone turno en un día libre que
-  RRHH fijó (al reagendar o dar el día): se reporta como conflicto.
+- Sincronización en los dos sentidos: Horarios del CRM y de Cuadratura son iguales. Dentro del
+  periodo enviado, el horario del agente queda como lo manda el CRM (una fecha sin turno o con
+  rest_day=true queda libre), también si RRHH lo había cambiado aquí: esos cambios ya se le
+  devolvieron al CRM (crm_push.py), así que si el CRM manda otra cosa es porque cambió después.
+- Excepciones: un día que RRHH cambió y aún no llegó al CRM (está en la cola crm_outbox) no se
+  toca; y una vacación o un compensatorio de RRHH no se pisa con un turno: se reporta como
+  conflicto y se le vuelve a enviar al CRM.
 - El CRM manda los agentes ordenados por equipo (supervisor primero): esa posición se guarda en
   crm_order para listarlos igual aquí.
 - Cada agente se aplica en su propio savepoint: un error en uno no bloquea a los demás.
@@ -27,7 +30,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models import ApiClient, Department, Employee, IntegrationSync, ShiftAssignment, ShiftDayOff
 from app.schemas.integration import AgentResult, CrmAgent, CrmSchedulePayload, SyncResult
-from app.services import audit
+from app.services import audit, crm_push
 from app.services.attendance_import import relink_badge
 from app.services.employee_roster import fix_case, name_key
 
@@ -130,15 +133,17 @@ def _apply_agent(
             )
         )
     }
-    days_off = set(
-        db.scalars(
-            select(ShiftDayOff.work_date).where(
+    days_off = {
+        d.work_date: d
+        for d in db.scalars(
+            select(ShiftDayOff).where(
                 ShiftDayOff.employee_id == employee.id,
                 ShiftDayOff.work_date >= payload.date_from,
                 ShiftDayOff.work_date <= payload.date_to,
             )
         )
-    )
+    }
+    pending = crm_push.pending(db, employee.id, payload.date_from, payload.date_to)
     wanted = {s.date: s for s in agent.shifts if not s.rest_day}
     conflicts = []
 
@@ -157,14 +162,19 @@ def _apply_agent(
             template_id=None,
         )
         current = existing.get(day)
-        if day in days_off:
+        off = days_off.get(day)
+        if day in pending:
+            continue
+        if off is not None and off.kind in ("vacacion", "compensatorio"):
             conflicts.append(day)
-        elif current is None:
+            crm_push.queue(db, [(employee.id, day)])
+            continue
+        if off is not None:  # día libre de RRHH: el CRM ya lo conocía y ahora pone turno
+            db.delete(off)
+        if current is None:
             db.add(ShiftAssignment(employee_id=employee.id, work_date=day, **values))
             counters.created += 1
-        elif current.source != "crm":
-            conflicts.append(day)
-        elif (current.start_at, current.end_at, current.break_minutes, current.notes) != (
+        elif current.source != "crm" or (current.start_at, current.end_at, current.break_minutes, current.notes) != (
             start_at,
             end_at,
             shift.break_minutes,
@@ -174,9 +184,9 @@ def _apply_agent(
                 setattr(current, k, v)
             counters.updated += 1
 
-    # Lo que el CRM ya no manda (o marcó como libre) se quita, solo si vino del CRM.
+    # Lo que el CRM ya no manda (o marcó como libre) se quita, salvo lo que aún va hacia el CRM.
     for day, current in existing.items():
-        if day not in wanted and current.source == "crm":
+        if day not in wanted and day not in pending:
             db.delete(current)
             counters.removed += 1
 
@@ -187,7 +197,7 @@ def _apply_agent(
         employee_id=employee.id,
         employee_created=False,
         message=(
-            "Estas fechas tienen un horario o un día libre cargado manualmente por RRHH y no se modificaron"
+            "Estas fechas son vacación o compensatorio en Cuadratura: no se puso turno y se le reenviaron al CRM"
             if conflicts
             else None
         ),

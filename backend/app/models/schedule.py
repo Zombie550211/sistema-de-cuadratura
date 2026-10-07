@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
 
 from app.models.base import Base, TimestampMixin
 
@@ -106,3 +107,18 @@ class VacationPeriod(TimestampMixin, Base):
     worked_days: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     settled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class CrmOutbox(Base):
+    """Día de un empleado que RRHH cambió en Cuadratura y falta enviar al CRM (sincronización en
+    los dos sentidos). Mientras esté aquí, lo que mande el CRM para ese día no lo pisa."""
+
+    __tablename__ = "crm_outbox"
+    __table_args__ = (UniqueConstraint("employee_id", "work_date", name="uq_crm_outbox_employee_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    work_date: Mapped[date] = mapped_column(Date)
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(Text)

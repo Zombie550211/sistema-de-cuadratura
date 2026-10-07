@@ -455,13 +455,12 @@ export function Schedules({ area }: { area: Area }) {
             />
             {pop.current?.source === "crm" && (
               <div className="caption sch-pop-note">
-                Este turno vino del CRM. Si lo cambia o reagenda aquí, el CRM ya no lo sobrescribe. "Quitar turno" deja que el próximo envío del CRM lo vuelva a
-                poner; "Dar día libre" no.
+                Este turno vino del CRM. Lo que cambie aquí (horas, reagendar, quitar o dar el día libre) también se cambia en el horario del CRM.
               </div>
             )}
             {pop.dayOff && (
               <div className="caption sch-pop-note">
-                {DAY_OFF_LABEL[pop.dayOff.kind]} fijado por RRHH{pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. El CRM no pone turno este día. Asignar un turno lo quita.
+                {DAY_OFF_LABEL[pop.dayOff.kind]} fijado por RRHH{pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. También está así en el CRM. Asignar un turno lo quita.
               </div>
             )}
             <div className="sch-pop-foot">
@@ -734,7 +733,7 @@ export function AssignModal({
         </div>
         {mode !== "turno" && (
           <div className="caption">
-            Los días elegidos quedan como {mode === "vacacion" ? "vacación" : "día compensatorio"}: se quita el turno que hubiera y el CRM ya no lo vuelve a poner.
+            Los días elegidos quedan como {mode === "vacacion" ? "vacación" : "día compensatorio"}: se quita el turno que hubiera y quedan como descanso también en el horario del CRM.
           </div>
         )}
         {error && <div className="alert">{error}</div>}

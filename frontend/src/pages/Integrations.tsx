@@ -33,7 +33,7 @@ export function Integrations() {
       <div className="page-head">
         <div>
           <h1>Integración CRM</h1>
-          <p>Los supervisores cargan los horarios en el CRM y el CRM los envía aquí cada fin de semana.</p>
+          <p>Los horarios se sincronizan en los dos sentidos: lo que los supervisores cargan en el CRM llega aquí, y lo que RRHH cambia aquí (turnos, días libres, vacaciones, compensatorios) vuelve al CRM.</p>
         </div>
         {isAdmin && (
           <button className="btn" onClick={() => setCreating(true)}>

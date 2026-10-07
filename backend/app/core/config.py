@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     max_upload_mb: int = 20
     cors_origins: list[str] = []
 
+    # Sincronización de horarios hacia el CRM (los cambios de RRHH vuelven al CRM).
+    # CRM_URL p. ej. https://crm.connecting.com ; CRM_API_KEY = CUADRATURA_ENTRADA_KEY del CRM.
+    crm_url: str | None = None
+    crm_api_key: str | None = None
+
     first_admin_username: str | None = None
     first_admin_password: str | None = None
 
