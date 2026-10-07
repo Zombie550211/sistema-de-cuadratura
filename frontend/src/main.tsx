@@ -10,7 +10,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { Layout } from "./components/Layout";
-import { AREAS, UNMAPPED_SLUG, type Role } from "./lib/api";
+import { AREAS, type Role } from "./lib/api";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { Dashboard } from "./pages/Dashboard";
 import { EmployeeProfile, EmployeeProfilePage } from "./pages/EmployeeProfile";
@@ -70,11 +70,8 @@ function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
-        <Route path="marcaciones" element={<KeepQuery to={`/marcaciones/${AREAS.find((a) => a.area === "ventas")!.slug}`} />} />
-        {AREAS.map((a) => (
-          <Route key={a.slug} path={`marcaciones/${a.slug}`} element={<Punches key={a.area} area={a.area} />} />
-        ))}
-        <Route path={`marcaciones/${UNMAPPED_SLUG}`} element={<Punches key="sin" area={null} />} />
+        <Route path="marcaciones" element={<Punches />} />
+        <Route path="marcaciones/*" element={<KeepQuery to="/marcaciones" />} />
         <Route path="importar" element={<Guard roles={["admin", "rrhh"]}><Import /></Guard>} />
         <Route path="horarios" element={<KeepQuery to={`/horarios/${AREAS.find((a) => a.area === "ventas")!.slug}`} />} />
         {AREAS.map((a) => (

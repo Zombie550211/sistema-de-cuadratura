@@ -79,3 +79,30 @@ class ShiftDayOff(TimestampMixin, Base):
     kind: Mapped[str] = mapped_column(String(20), default="libre", server_default="libre")
     notes: Mapped[str | None] = mapped_column(Text)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class Holiday(TimestampMixin, Base):
+    """Asueto nacional (o local). Se trabaja: el empleado que marca ese día gana un compensatorio;
+    si no marca, lo pierde."""
+
+    __tablename__ = "holidays"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+
+
+class VacationPeriod(TimestampMixin, Base):
+    """Lo que RRHH anotó de un período de vacaciones (un año desde el aniversario de ingreso):
+    días que el empleado trabajó en lugar de descansar, o el período ya cerrado como completo.
+    Los días que descansó son los días de vacación del calendario (ShiftDayOff)."""
+
+    __tablename__ = "vacation_periods"
+    __table_args__ = (UniqueConstraint("employee_id", "period_start", name="uq_vacation_periods_employee_start"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    worked_days: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    settled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    notes: Mapped[str | None] = mapped_column(Text)

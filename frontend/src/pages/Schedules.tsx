@@ -230,10 +230,30 @@ export function Schedules({ area }: { area: Area }) {
 
   return (
     <div className="page sch">
-      <div className="sch-kicker">Horarios · {section}</div>
+      <div className="sch-head">
+        <div className="sch-kicker">Horarios · {section}</div>
+        {sync && (
+          <span className={`caption${sync.status === "ok" ? "" : " sch-warn"}`}>
+            Última actualización del CRM: {fmtDateTime(sync.received_at)}
+            {sync.status !== "ok" && ` · ${sync.status}`}
+          </span>
+        )}
+        <button
+          className="btn ghost sm"
+          onClick={() => {
+            setStart(weekStart(today()));
+            setDayIndex((new Date(`${today()}T00:00:00Z`).getUTCDay() + 6) % 7);
+          }}
+        >
+          Hoy
+        </button>
+      </div>
 
-      {/* KPIs: personas en turno por día de la semana elegida. */}
+      {/* KPIs: personas en turno por día de la semana elegida; las flechas cambian de semana. */}
       <div className="sch-days">
+        <button className="icon-btn sch-arrow" onClick={() => setStart(addDays(start, -7))} aria-label="Semana anterior">
+          <IconChevronLeft width={20} height={20} />
+        </button>
         {days.map((d, i) => {
           const on = visible.filter((e) => byKey.has(`${e.id}|${d}`)).length;
           return (
@@ -248,36 +268,13 @@ export function Schedules({ area }: { area: Area }) {
             </button>
           );
         })}
+        <button className="icon-btn sch-arrow" onClick={() => setStart(addDays(start, 7))} aria-label="Semana siguiente">
+          <IconChevronRight width={20} height={20} />
+        </button>
       </div>
 
-      {/* Una sola barra: semana, filtros y acciones. */}
+      {/* Una sola barra: filtros y acciones. */}
       <div className="sch-toolbar">
-        <div className="row" style={{ gap: 4 }}>
-          <button className="icon-btn" onClick={() => setStart(addDays(start, -7))} aria-label="Semana anterior">
-            <IconChevronLeft width={20} height={20} />
-          </button>
-          <span className="sch-week">
-            {fmtShort(days[0])} – {fmtShort(days[6])} {days[6].slice(0, 4)}
-          </span>
-          <button className="icon-btn" onClick={() => setStart(addDays(start, 7))} aria-label="Semana siguiente">
-            <IconChevronRight width={20} height={20} />
-          </button>
-          <button
-            className="btn ghost sm"
-            onClick={() => {
-              setStart(weekStart(today()));
-              setDayIndex((new Date(`${today()}T00:00:00Z`).getUTCDay() + 6) % 7);
-            }}
-          >
-            Hoy
-          </button>
-        </div>
-        {sync && (
-          <span className={sync.status === "ok" ? "muted" : "sch-warn"}>
-            Última actualización del CRM: {fmtDateTime(sync.received_at)}
-            {sync.status !== "ok" && ` · ${sync.status}`}
-          </span>
-        )}
         <div className="spacer" />
         <select className="input" style={{ width: 200 }} value={team} onChange={(e) => setTeam(e.target.value)} aria-label="Filtrar por team">
           <option value="all">Todos los teams</option>

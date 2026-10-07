@@ -321,6 +321,58 @@ class LeaveTotals(BaseModel):
     compensatorio: int
 
 
+class VacationPeriodOut(BaseModel):
+    """Un período de 15 días (un año desde el aniversario de ingreso) y cómo se entregó."""
+
+    start: date
+    end: date
+    rested: list[date]
+    worked: int
+    settled: bool
+    notes: str | None
+    pending: int
+
+
+class VacationStatusOut(BaseModel):
+    """Vacaciones del empleado por antigüedad: 15 días al cumplir cada año desde su ingreso."""
+
+    employee_id: int
+    hire_date: date | None
+    years: int
+    next_date: date | None
+    periods: list[VacationPeriodOut]
+    extra: list[date]
+    pending: int
+
+
+class VacationPeriodIn(BaseModel):
+    worked_days: int = Field(default=0, ge=0, le=15)
+    settled: bool = False
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class HolidayIn(BaseModel):
+    day: date
+    name: str = Field(min_length=1, max_length=120)
+
+
+class HolidayOut(ORM):
+    id: int
+    day: date
+    name: str
+
+
+class CompensatoryStatusOut(BaseModel):
+    """Compensatorios del empleado: asuetos que marcó (ganados), los que no marcó (perdidos),
+    los días compensatorio ya asignados y el saldo que le queda."""
+
+    employee_id: int
+    earned: list[HolidayOut]
+    lost: list[HolidayOut]
+    taken: int
+    balance: int
+
+
 class BulkAssignIn(BaseModel):
     """Asigna un turno a varios empleados en un rango de fechas y días de la semana."""
 

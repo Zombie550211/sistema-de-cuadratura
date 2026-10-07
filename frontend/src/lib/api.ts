@@ -64,9 +64,6 @@ export const AREAS: { area: Area; slug: string; label: string }[] = [
   { area: "ventas", slug: "agentes", label: "Agentes de ventas" },
 ];
 
-/** Sección de Marcaciones con las marcas cuyo ID de reloj aún no tiene empleado. */
-export const UNMAPPED_SLUG = "sin-empleado";
-
 export const areaPath = (area: Area) => `/empleados/${AREAS.find((a) => a.area === area)!.slug}`;
 
 export interface EmployeeInput {
@@ -248,6 +245,49 @@ export interface ShiftDayOff {
   work_date: string;
   kind: DayOffKind;
   notes: string | null;
+}
+
+/** Un período de 15 días de vacación (un año desde el aniversario de ingreso) y cómo se entregó. */
+export interface VacationPeriod {
+  start: string;
+  end: string;
+  /** Días que descansó (días de vacación del calendario aplicados a este período). */
+  rested: string[];
+  /** Días que trabajó en lugar de descansar. */
+  worked: number;
+  /** Cerrado por RRHH como completo (historia anterior al sistema). */
+  settled: boolean;
+  notes: string | null;
+  pending: number;
+}
+
+/** Vacaciones por antigüedad: 15 días al cumplir cada año desde la fecha de ingreso. */
+export interface VacationStatus {
+  employee_id: number;
+  hire_date: string | null;
+  years: number;
+  /** Siguiente aniversario: cuando le tocan los próximos 15 días. */
+  next_date: string | null;
+  periods: VacationPeriod[];
+  /** Días descansados que no caben en ningún período. */
+  extra: string[];
+  pending: number;
+}
+
+/** Asueto: se trabaja; quien marca ese día gana un compensatorio. */
+export interface Holiday {
+  id: number;
+  day: string;
+  name: string;
+}
+
+/** Compensatorios del empleado: asuetos marcados (ganados), no marcados (perdidos) y saldo. */
+export interface CompensatoryStatus {
+  employee_id: number;
+  earned: Holiday[];
+  lost: Holiday[];
+  taken: number;
+  balance: number;
 }
 
 export interface WorkDay {

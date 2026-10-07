@@ -4,7 +4,7 @@ from app.models.base import Base
 from app.models.certificate import SalaryCertificate
 from app.models.integration import ApiClient, IntegrationSync
 from app.models.employee import AREAS, Department, Employee, EmployeeStatus, PayFrequency, area_for, user_code_base
-from app.models.schedule import ShiftAssignment, ShiftDayOff, ShiftTemplate
+from app.models.schedule import Holiday, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
 from app.models.user import Role, User
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "Device",
     "Employee",
     "EmployeeStatus",
+    "Holiday",
     "ImportBatch",
     "PayFrequency",
     "SalaryCertificate",
@@ -28,4 +29,5 @@ __all__ = [
     "ShiftDayOff",
     "ShiftTemplate",
     "User",
+    "VacationPeriod",
 ]

@@ -142,7 +142,7 @@ def list_punches(
     badge: str | None = None,
     include_double_taps: bool = True,
     only_unmapped: bool = False,
-    limit: Annotated[int, Query(ge=1, le=2000)] = 500,
+    limit: Annotated[int, Query(ge=1, le=10000)] = 500,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
     if date_to < date_from or (date_to - date_from).days > 93:

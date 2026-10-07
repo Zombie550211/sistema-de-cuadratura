@@ -7,10 +7,13 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, Staff
 from app.core.config import get_settings
-from app.models import Employee, ShiftAssignment, ShiftDayOff, ShiftTemplate
+from app.models import Employee, EmployeeStatus, Holiday, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
 from app.schemas import (
     BulkAssignIn,
     BulkAssignOut,
+    CompensatoryStatusOut,
+    HolidayIn,
+    HolidayOut,
     ShiftAssignmentOut,
     LeaveBulkIn,
     LeaveBulkOut,
@@ -19,8 +22,13 @@ from app.schemas import (
     ShiftTemplateIn,
     ShiftTemplateOut,
     ShiftUpdateIn,
+    VacationPeriodIn,
+    VacationPeriodOut,
+    VacationStatusOut,
 )
 from app.services import audit
+from app.services.compensatory import compensatory_status, data_years, ensure_years
+from app.services.vacations import PeriodRecord, anniversary, completed_years, vacation_status
 
 router = APIRouter(prefix="/schedules", tags=["horarios"])
 
@@ -250,6 +258,109 @@ def list_days_off(
     if kind:
         stmt = stmt.where(ShiftDayOff.kind == kind)
     return db.scalars(stmt.order_by(ShiftDayOff.work_date)).all()
+
+
+def _active_employees(db: DB, area: str | None) -> list[Employee]:
+    stmt = select(Employee).where(Employee.status == EmployeeStatus.activo)
+    if area:
+        stmt = stmt.where(Employee.area == area)
+    return list(db.scalars(stmt).all())
+
+
+def _vacation_out(status) -> dict:
+    return dict(
+        hire_date=status.hire_date,
+        years=status.years,
+        next_date=status.next_date,
+        periods=[VacationPeriodOut(start=p.start, end=p.end, rested=p.rested, worked=p.worked, settled=p.settled, notes=p.notes, pending=p.pending) for p in status.periods],
+        extra=status.extra,
+        pending=status.pending,
+    )
+
+
+@router.get("/vacations", response_model=list[VacationStatusOut])
+def list_vacations(db: DB, _: Staff, area: Annotated[str | None, Query(max_length=16)] = None):
+    """Vacaciones de los empleados activos, calculadas desde la fecha de ingreso: un período de
+    15 días por año cumplido, con los días descansados, los trabajados y los pendientes."""
+    today = datetime.now(get_settings().tz).date()
+    employees = _active_employees(db, area)
+    ids = [e.id for e in employees]
+    rested: dict[int, list[date]] = {}
+    for emp_id, day in db.execute(
+        select(ShiftDayOff.employee_id, ShiftDayOff.work_date).where(ShiftDayOff.kind == "vacacion", ShiftDayOff.employee_id.in_(ids))
+    ):
+        rested.setdefault(emp_id, []).append(day)
+    records: dict[int, dict[date, PeriodRecord]] = {}
+    for r in db.scalars(select(VacationPeriod).where(VacationPeriod.employee_id.in_(ids))):
+        records.setdefault(r.employee_id, {})[r.period_start] = PeriodRecord(r.worked_days, r.settled, r.notes)
+    return [
+        VacationStatusOut(employee_id=e.id, **_vacation_out(vacation_status(e.hire_date, today, rested.get(e.id, []), records.get(e.id))))
+        for e in employees
+    ]
+
+
+@router.put("/vacations/{employee_id}/periods/{period_start}", status_code=status.HTTP_204_NO_CONTENT)
+def save_vacation_period(employee_id: int, period_start: date, data: VacationPeriodIn, db: DB, user: HR):
+    """Anota cuántos días del período trabajó el empleado, o lo cierra como completo."""
+    employee = db.get(Employee, employee_id)
+    if employee is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
+    today = datetime.now(get_settings().tz).date()
+    if employee.hire_date is None or period_start not in {
+        anniversary(employee.hire_date, n) for n in range(1, completed_years(employee.hire_date, today) + 1)
+    }:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Ese período de vacaciones no existe para el empleado")
+    record = db.scalar(select(VacationPeriod).where(VacationPeriod.employee_id == employee_id, VacationPeriod.period_start == period_start))
+    if record is None:
+        record = VacationPeriod(employee_id=employee_id, period_start=period_start)
+        db.add(record)
+    record.worked_days, record.settled, record.notes = data.worked_days, data.settled, data.notes
+    db.flush()
+    audit.record(db, user, "vacaciones", "vacation_period", record.id, {"empleado": employee_id, "periodo": period_start.isoformat(), **data.model_dump()})
+    db.commit()
+
+
+@router.get("/holidays", response_model=list[HolidayOut])
+def list_holidays(db: DB, _: Staff, year: Annotated[int, Query(ge=2000, le=2100)]):
+    """Asuetos del año. La primera vez se cargan los nacionales; RRHH agrega o quita los demás."""
+    ensure_years(db, range(year, year + 1))
+    db.commit()
+    return db.scalars(select(Holiday).where(Holiday.day >= date(year, 1, 1), Holiday.day <= date(year, 12, 31)).order_by(Holiday.day)).all()
+
+
+@router.post("/holidays", response_model=HolidayOut, status_code=status.HTTP_201_CREATED)
+def create_holiday(data: HolidayIn, db: DB, user: HR):
+    ensure_years(db, range(data.day.year, data.day.year + 1))
+    if db.scalar(select(Holiday).where(Holiday.day == data.day)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Ese día ya es asueto")
+    holiday = Holiday(day=data.day, name=data.name.strip())
+    db.add(holiday)
+    db.flush()
+    audit.record(db, user, "crear", "holiday", holiday.id, {"fecha": data.day.isoformat(), "nombre": holiday.name})
+    db.commit()
+    return holiday
+
+
+@router.delete("/holidays/{holiday_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_holiday(holiday_id: int, db: DB, user: HR):
+    holiday = db.get(Holiday, holiday_id)
+    if holiday is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Asueto no encontrado")
+    audit.record(db, user, "eliminar", "holiday", holiday.id, {"fecha": holiday.day.isoformat(), "nombre": holiday.name})
+    db.delete(holiday)
+    db.commit()
+
+
+@router.get("/compensatory", response_model=list[CompensatoryStatusOut])
+def list_compensatory(db: DB, _: Staff, area: Annotated[str | None, Query(max_length=16)] = None):
+    """Compensatorios de los empleados activos, calculados de las marcaciones en los asuetos."""
+    today = datetime.now(get_settings().tz).date()
+    ensure_years(db, data_years(db, today))
+    db.commit()
+    return [
+        CompensatoryStatusOut(employee_id=s.employee_id, earned=s.earned, lost=s.lost, taken=s.taken, balance=s.balance)
+        for s in compensatory_status(db, _active_employees(db, area), today)
+    ]
 
 
 @router.post("/days-off", response_model=ShiftDayOffOut, status_code=status.HTTP_201_CREATED)

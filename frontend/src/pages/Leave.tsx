@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { IconChevronLeft, IconChevronRight, IconPlus, IconX } from "../components/Icons";
+import { IconCalendar, IconChevronLeft, IconChevronRight, IconPlus, IconX } from "../components/Icons";
+import { Modal } from "../components/Modal";
 import { ConfirmDelete, RowMenu } from "../components/RowMenu";
-import { api, AREAS, DAY_OFF_LABEL, type Area, type Employee, type Page, type ShiftDayOff, type ShiftTemplate } from "../lib/api";
+import { api, ApiError, AREAS, DAY_OFF_LABEL, type Area, type CompensatoryStatus, type Holiday, type Employee, type Page, type ShiftDayOff, type ShiftTemplate, type VacationPeriod, type VacationStatus } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { addDays, fmtDate, today } from "../lib/format";
+import { addDays, fmtDate, seniority, today } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 import { AssignModal } from "./Schedules";
 
@@ -35,6 +36,36 @@ function ranges(days: ShiftDayOff[]): Range[] {
   return out;
 }
 
+/** Asignación abierta desde la página: a quién y, para vacaciones, las fechas ya calculadas. */
+interface Assigning {
+  ids: number[];
+  from?: string;
+  to?: string;
+  notes?: string;
+}
+
+/** Fechas sueltas agrupadas en tramos seguidos: "5–9 ene, 2 feb". */
+function datesLabel(dates: string[]): string {
+  const out: { from: string; to: string }[] = [];
+  for (const d of [...dates].sort()) {
+    const last = out[out.length - 1];
+    if (last && addDays(last.to, 1) === d) last.to = d;
+    else out.push({ from: d, to: d });
+  }
+  return out.map((r) => (r.from === r.to ? short(r.from) : `${short(r.from)} – ${short(r.to)}`)).join(", ");
+}
+
+const periodLabel = (p: VacationPeriod) => `${fmtDate(p.start)} – ${fmtDate(p.end)}`;
+
+/** Fechas sugeridas para los días que le faltan de un período: desde que le tocan (o desde hoy,
+ *  si ya le tocaban). Sin período, los 15 días del próximo aniversario. */
+function vacationRange(employeeId: number, p: VacationPeriod | null, nextDate: string): Assigning {
+  const now = today();
+  const from = p ? (p.start > now ? p.start : now) : nextDate;
+  const days = p ? p.pending : 15;
+  return { ids: [employeeId], from, to: addDays(from, days - 1), notes: p ? `Vacaciones ${periodLabel(p)}` : undefined };
+}
+
 const rangeLabel = (r: Range) => (r.from === r.to ? short(r.from) : `${short(r.from)} – ${short(r.to)}`);
 
 /** Días de vacación o compensatorios de una sección: todos sus empleados, con los días que
@@ -48,7 +79,7 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
   const navigate = useNavigate();
   const [year, setYear] = useState(() => Number(today().slice(0, 4)));
   const [q, setQ] = useState("");
-  const [assigning, setAssigning] = useState<number[] | null>(null);
+  const [assigning, setAssigning] = useState<Assigning | null>(null);
   const [removing, setRemoving] = useState<{ employee: Employee; range: Range } | null>(null);
 
   const employees = useAsync(() => api.get<Page<Employee>>("/employees", { status: "activo", area, limit: 500 }), [area]);
@@ -57,6 +88,21 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
     () => api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: `${year}-01-01`, date_to: `${year}-12-31`, kind }),
     [year, kind],
   );
+
+  const isVacation = kind === "vacacion";
+  const vacations = useAsync(
+    () => (isVacation ? api.get<VacationStatus[]>("/schedules/vacations", { area }) : Promise.resolve([])),
+    [isVacation, area],
+  );
+  const vacationOf = useMemo(() => new Map((vacations.data ?? []).map((v) => [v.employee_id, v])), [vacations.data]);
+  const comp = useAsync(
+    () => (isVacation ? Promise.resolve([]) : api.get<CompensatoryStatus[]>("/schedules/compensatory", { area })),
+    [isVacation, area],
+  );
+  const compOf = useMemo(() => new Map((comp.data ?? []).map((c) => [c.employee_id, c])), [comp.data]);
+  const inYear = (h: Holiday) => h.day.startsWith(String(year));
+  const [editingHolidays, setEditingHolidays] = useState(false);
+  const [periodsOf, setPeriodsOf] = useState<Employee | null>(null);
 
   const byEmployee = useMemo(() => {
     const map = new Map<number, ShiftDayOff[]>();
@@ -67,13 +113,13 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
   const all = employees.data?.items ?? [];
   const search = q.trim().toLowerCase();
   const shown = all.filter((e) => !search || e.full_name.toLowerCase().includes(search) || e.code.toLowerCase().includes(search));
-  const total = all.reduce((n, e) => n + (byEmployee.get(e.id)?.length ?? 0), 0);
-  const withDays = all.filter((e) => byEmployee.has(e.id)).length;
 
   function done() {
     setAssigning(null);
     setRemoving(null);
     days.reload();
+    vacations.reload();
+    comp.reload();
   }
 
   return (
@@ -82,13 +128,14 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
         <div>
           <span className="caption">{label}</span>
           <h1>{section}</h1>
-          <p>
-            {total} día{total === 1 ? "" : "s"} de {noun} en {year} · {withDays} de {all.length} empleados con días. Esos días se quita el turno y el CRM no lo
-            vuelve a poner.
-          </p>
         </div>
+        {!isVacation && (
+          <button className="btn ghost" onClick={() => setEditingHolidays(true)}>
+            <IconCalendar /> Asuetos {year}
+          </button>
+        )}
         {canEdit && (
-          <button className="btn" onClick={() => setAssigning([])} disabled={!all.length || !templates.data}>
+          <button className="btn" onClick={() => setAssigning({ ids: [] })} disabled={!all.length || !templates.data}>
             <IconPlus /> Asignar {noun}
           </button>
         )}
@@ -110,13 +157,19 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
           <input className="input" style={{ flex: 1, minWidth: 200 }} placeholder="Buscar por nombre o código" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
 
-        {(employees.error || days.error) && <div className="alert">{employees.error ?? days.error}</div>}
+        {(employees.error || days.error || comp.error || vacations.error) && (
+          <div className="alert">{employees.error ?? days.error ?? comp.error ?? vacations.error}</div>
+        )}
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
                 <th>Empleado</th>
-                <th className="num">Días en {year}</th>
+                {isVacation && <th>Ingreso</th>}
+                {isVacation && <th>Vacaciones</th>}
+                {!isVacation && <th>Asuetos trabajados en {year}</th>}
+                {!isVacation && <th className="num" title="Compensatorios ganados menos los ya asignados (todos los años)">Saldo</th>}
+                <th className="num">{isVacation ? `Días en ${year}` : `Asignados en ${year}`}</th>
                 <th>Fechas</th>
                 {canEdit && <th className="row-actions" />}
               </tr>
@@ -124,6 +177,10 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
             <tbody>
               {shown.map((e) => {
                 const mine = byEmployee.get(e.id) ?? [];
+                const v = vacationOf.get(e.id);
+                const firstPending = v?.periods.find((p) => p.pending > 0) ?? null;
+                const suggested = v?.next_date ? vacationRange(e.id, firstPending, v.next_date) : null;
+                const c = compOf.get(e.id);
                 return (
                   <tr key={e.id}>
                     <td>
@@ -133,6 +190,25 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
                         {e.position && ` · ${e.position}`}
                       </div>
                     </td>
+                    {isVacation && (
+                      <td className="nowrap">
+                        {e.hire_date ? (
+                          <>
+                            <div>{fmtDate(e.hire_date)}</div>
+                            <div className="caption">{seniority(e.hire_date)}</div>
+                          </>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                    )}
+                    {isVacation && <VacationCell v={v} onOpen={() => setPeriodsOf(e)} />}
+                    {!isVacation && <EarnedCell c={c} inYear={inYear} />}
+                    {!isVacation && (
+                      <td className="num">
+                        {c ? <span className={`badge${c.balance > 0 ? " accent" : c.balance < 0 ? " danger" : ""}`} title={`${c.earned.length} ganados · ${c.taken} asignados`}>{c.balance}</span> : <span className="muted">—</span>}
+                      </td>
+                    )}
                     <td className="num">{mine.length ? <b className="mono">{mine.length}</b> : <span className="muted">0</span>}</td>
                     <td>
                       {mine.length ? (
@@ -158,7 +234,11 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
                         <RowMenu
                           label={`Acciones de ${e.full_name}`}
                           actions={[
-                            { label: `Asignar ${noun}`, onClick: () => setAssigning([e.id]) },
+                            ...(isVacation && v?.periods.length ? [{ label: "Períodos: días descansados y trabajados", onClick: () => setPeriodsOf(e) }] : []),
+                            ...(suggested
+                              ? [{ label: `Asignar vacaciones (${fmtDate(suggested.from!)} – ${fmtDate(suggested.to!)})`, onClick: () => setAssigning(suggested) }]
+                              : []),
+                            { label: suggested ? "Asignar otras fechas" : `Asignar ${noun}`, onClick: () => setAssigning({ ids: [e.id] }) },
                             { label: "Ver ficha", onClick: () => navigate(`/empleados/${e.id}`) },
                           ]}
                         />
@@ -177,18 +257,326 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
         <AssignModal
           employees={all}
           templates={templates.data ?? []}
-          defaultFrom={today()}
-          defaultTo={addDays(today(), 4)}
-          initialSelected={assigning}
+          defaultFrom={assigning.from ?? today()}
+          defaultTo={assigning.to ?? addDays(today(), 4)}
+          initialSelected={assigning.ids}
           initialMode={kind}
+          initialWeekdays={assigning.from ? [0, 1, 2, 3, 4, 5, 6] : undefined}
+          initialNotes={assigning.notes}
           onClose={() => setAssigning(null)}
           onDone={done}
         />
       )}
+      {periodsOf && vacationOf.get(periodsOf.id) && (
+        <VacationPeriodsModal
+          employee={periodsOf}
+          v={vacationOf.get(periodsOf.id)!}
+          canEdit={canEdit}
+          onAssign={(p) => {
+            setPeriodsOf(null);
+            setAssigning(vacationRange(periodsOf.id, p, vacationOf.get(periodsOf.id)!.next_date!));
+          }}
+          onClose={() => setPeriodsOf(null)}
+          onChanged={() => vacations.reload()}
+        />
+      )}
+      {editingHolidays && <HolidaysModal year={year} canEdit={canEdit} onClose={() => setEditingHolidays(false)} onChanged={() => comp.reload()} />}
       {removing && (
         <RemoveRange employee={removing.employee} range={removing.range} noun={noun} onClose={() => setRemoving(null)} onDone={done} />
       )}
     </div>
+  );
+}
+
+/** Asuetos del año que el empleado marcó (compensatorio ganado) y los que no (perdido). */
+function EarnedCell({ c, inYear }: { c?: CompensatoryStatus; inYear: (h: Holiday) => boolean }) {
+  const earned = c?.earned.filter(inYear) ?? [];
+  const lost = c?.lost.filter(inYear) ?? [];
+  if (!earned.length && !lost.length) return <td><span className="muted">—</span></td>;
+  return (
+    <td>
+      <div className="chips" style={{ flexWrap: "wrap" }}>
+        {earned.map((h) => (
+          <span key={h.id} className="badge accent" title={`${h.name}: marcó, ganó un compensatorio`}>
+            {short(h.day)}
+          </span>
+        ))}
+      </div>
+      {lost.length > 0 && (
+        <div className="caption" title={lost.map((h) => `${fmtDate(h.day)} ${h.name}`).join("\n")}>
+          {lost.length} perdido{lost.length === 1 ? "" : "s"} (no marcó)
+        </div>
+      )}
+    </td>
+  );
+}
+
+/** Asuetos del año: vienen cargados los nacionales; RRHH agrega los locales o quita alguno. */
+function HolidaysModal({ year, canEdit, onClose, onChanged }: { year: number; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
+  const list = useAsync(() => api.get<Holiday[]>("/schedules/holidays", { year }), [year]);
+  const [day, setDay] = useState("");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+      list.reload();
+      onChanged();
+    } catch (err) {
+      setError((err as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function add(e: FormEvent) {
+    e.preventDefault();
+    run(async () => {
+      await api.post("/schedules/holidays", { day, name });
+      setDay("");
+      setName("");
+    });
+  }
+
+  return (
+    <Modal title={`Asuetos ${year}`} onClose={onClose}>
+      <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
+        Quien marca en un asueto gana un día compensatorio; quien no marca, lo pierde. Si un asueto aún no tiene marcas importadas, no se cuenta como perdido.
+      </p>
+      {list.error && <div className="alert">{list.error}</div>}
+      <div className="table-wrap">
+        <table className="table">
+          <tbody>
+            {list.data?.map((h) => (
+              <tr key={h.id}>
+                <td className="nowrap">{fmtDate(h.day)}</td>
+                <td>{h.name}</td>
+                {canEdit && (
+                  <td className="num">
+                    <button className="btn sm ghost" disabled={busy} onClick={() => run(() => api.delete(`/schedules/holidays/${h.id}`))}>
+                      Quitar
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {canEdit && (
+        <form className="row" style={{ marginTop: 16, alignItems: "flex-end" }} onSubmit={add}>
+          <label className="field">
+            <span>Fecha</span>
+            <input className="input" type="date" required min={`${year}-01-01`} max={`${year}-12-31`} value={day} onChange={(e) => setDay(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1, minWidth: 180 }}>
+            <span>Nombre</span>
+            <input className="input" required maxLength={120} placeholder="p. ej. Fiestas patronales" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <button className="btn" disabled={busy}>
+            <IconPlus /> Agregar
+          </button>
+        </form>
+      )}
+      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+      <div className="modal-foot">
+        <button className="btn" onClick={onClose}>
+          Listo
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Estado de las vacaciones: días pendientes de todos sus períodos o cuándo le tocan. */
+function VacationCell({ v, onOpen }: { v?: VacationStatus; onOpen: () => void }) {
+  if (!v?.next_date) return <td><span className="muted" title="Agregue la fecha de ingreso en la ficha del empleado">Sin fecha de ingreso</span></td>;
+  if (!v.periods.length) {
+    return (
+      <td className="nowrap">
+        <div>Le tocan el {fmtDate(v.next_date)}</div>
+        <div className="caption">Al cumplir su primer año</div>
+      </td>
+    );
+  }
+  const owing = v.periods.filter((p) => p.pending > 0);
+  return (
+    <td className="nowrap">
+      <button type="button" className="link-btn" onClick={onOpen} title="Ver períodos: días descansados y trabajados">
+        {v.pending > 0 ? (
+          <span className="badge warn">
+            {v.pending} día{v.pending === 1 ? "" : "s"} pendiente{v.pending === 1 ? "" : "s"}
+          </span>
+        ) : (
+          <span className="badge accent">Al día</span>
+        )}
+      </button>
+      <div className="caption">
+        {owing.length > 1 ? `De ${owing.length} períodos` : owing.length === 1 ? `Período ${periodLabel(owing[0])}` : `Próximas: ${fmtDate(v.next_date)}`}
+      </div>
+    </td>
+  );
+}
+
+/** Los períodos de vacaciones del empleado: qué días descansó, cuántos trabajó y cuántos le
+ *  faltan. RRHH anota los días trabajados, cierra la historia vieja como completa o asigna los
+ *  días descansados (también fechas pasadas) en el calendario. */
+function VacationPeriodsModal({
+  employee,
+  v,
+  canEdit,
+  onAssign,
+  onClose,
+  onChanged,
+}: {
+  employee: Employee;
+  v: VacationStatus;
+  canEdit: boolean;
+  onAssign: (p: VacationPeriod) => void;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [worked, setWorked] = useState<Record<string, number>>(() => Object.fromEntries(v.periods.map((p) => [p.start, p.worked])));
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(p: VacationPeriod, body: { worked_days: number; settled: boolean }) {
+    setBusy(p.start);
+    setError(null);
+    try {
+      await api.put(`/schedules/vacations/${employee.id}/periods/${p.start}`, { ...body, notes: p.notes });
+      onChanged();
+    } catch (err) {
+      setError((err as ApiError).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Modal title={`Vacaciones de ${employee.full_name}`} onClose={onClose} wide>
+      <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
+        Ingreso {fmtDate(v.hire_date!)} · 15 días por cada año cumplido. Los días descansados se toman del calendario (también puede asignar fechas pasadas) y se
+        aplican al período más antiguo que tenga días pendientes.
+      </p>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Período</th>
+              <th>Descansó</th>
+              <th>Trabajó</th>
+              <th>Pendientes</th>
+              {canEdit && <th />}
+            </tr>
+          </thead>
+          <tbody>
+            {[...v.periods].reverse().map((p) => {
+              const max = Math.max(15 - p.rested.length, 0);
+              const value = worked[p.start] ?? p.worked;
+              const dirty = value !== p.worked;
+              return (
+                <tr key={p.start}>
+                  <td className="nowrap">{periodLabel(p)}</td>
+                  <td>
+                    {p.rested.length ? (
+                      <div title={p.rested.map(fmtDate).join("\n")}>
+                        <b className="mono">{p.rested.length}</b>{" "}
+                        <span className="caption">{datesLabel(p.rested)}</span>
+                      </div>
+                    ) : (
+                      <span className="muted">0</span>
+                    )}
+                  </td>
+                  <td className="nowrap">
+                    {canEdit && !p.settled ? (
+                      <input
+                        className="input mono"
+                        type="number"
+                        min={0}
+                        max={max}
+                        style={{ width: 80 }}
+                        value={value}
+                        onChange={(e) => setWorked({ ...worked, [p.start]: Math.min(Math.max(Number(e.target.value) || 0, 0), max) })}
+                      />
+                    ) : (
+                      <span className="mono">{p.worked}</span>
+                    )}
+                  </td>
+                  <td className="nowrap">
+                    {p.settled ? (
+                      <span className="badge accent">Completas</span>
+                    ) : p.pending > 0 ? (
+                      <span className="badge warn">{p.pending}</span>
+                    ) : (
+                      <span className="badge accent">Completas</span>
+                    )}
+                  </td>
+                  {canEdit && (
+                    <td className="num">
+                      <div className="chips" style={{ justifyContent: "flex-end" }}>
+                        {dirty && (
+                          <button className="btn sm" disabled={busy !== null} onClick={() => save(p, { worked_days: value, settled: false })}>
+                            Guardar
+                          </button>
+                        )}
+                        {!p.settled && p.pending > 0 && !dirty && (
+                          <>
+                            <button className="btn sm ghost" disabled={busy !== null} onClick={() => onAssign(p)}>
+                              Asignar descanso
+                            </button>
+                            <button
+                              className="btn sm ghost"
+                              disabled={busy !== null}
+                              title="Trabajó todos los días que le faltaban de este período"
+                              onClick={() => save(p, { worked_days: p.worked + p.pending, settled: false })}
+                            >
+                              Las trabajó
+                            </button>
+                            <button
+                              className="btn sm ghost"
+                              disabled={busy !== null}
+                              title="Ya se tomaron antes de usar el sistema: cerrar el período sin pendientes"
+                              onClick={() => save(p, { worked_days: p.worked, settled: true })}
+                            >
+                              Ya las tomó
+                            </button>
+                          </>
+                        )}
+                        {p.settled && (
+                          <button className="btn sm ghost" disabled={busy !== null} onClick={() => save(p, { worked_days: p.worked, settled: false })}>
+                            Reabrir
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {v.extra.length > 0 && (
+        <div className="alert info" style={{ marginTop: 16 }}>
+          {v.extra.length} día{v.extra.length === 1 ? "" : "s"} descansado{v.extra.length === 1 ? "" : "s"} de más (adelantado{v.extra.length === 1 ? "" : "s"} al próximo período):{" "}
+          {v.extra.map(fmtDate).join(", ")}.
+        </div>
+      )}
+      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+      <div className="modal-foot">
+        <span className="caption" style={{ marginRight: "auto" }}>
+          Total pendiente: <b>{v.pending}</b> día{v.pending === 1 ? "" : "s"}
+        </span>
+        <button className="btn" onClick={onClose}>
+          Listo
+        </button>
+      </div>
+    </Modal>
   );
 }
 

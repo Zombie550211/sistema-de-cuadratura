@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
-import { AREAS, UNMAPPED_SLUG, type Role } from "../lib/api";
+import { AREAS, type Role } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ROLE_LABEL } from "../lib/format";
 import { IconCalendar, IconChevronDown, IconClock, IconHome, IconLink, IconLogout, IconRepeat, IconShield, IconSun, IconUpload, IconUsers } from "./Icons";
@@ -19,9 +19,9 @@ const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }
   { to: "/usuarios", label: "Usuarios", icon: IconShield, roles: ["admin"] },
 ];
 
-/** Empleados y Marcaciones se despliegan en sus secciones; quedan abiertos mientras se navega
+/** Empleados, Horarios y los días libres se despliegan en sus secciones; quedan abiertos mientras se navega
  *  dentro de ellas. */
-function SectionNav({ base, label, icon: Icon, extra = [] }: { base: string; label: string; icon: typeof IconHome; extra?: { slug: string; label: string }[] }) {
+function SectionNav({ base, label, icon: Icon }: { base: string; label: string; icon: typeof IconHome }) {
   const inside = useLocation().pathname.startsWith(base);
   const [open, setOpen] = useState(inside);
   const shown = open || inside;
@@ -34,7 +34,7 @@ function SectionNav({ base, label, icon: Icon, extra = [] }: { base: string; lab
       </button>
       {shown && (
         <div className="nav-sub">
-          {[...AREAS, ...extra].map((a) => (
+          {AREAS.map((a) => (
             <NavLink key={a.slug} to={`${base}/${a.slug}`}>
               {a.label}
             </NavLink>
@@ -68,8 +68,6 @@ export function Layout() {
           {LINKS.filter((l) => can(...l.roles)).map(({ to, label, icon: Icon }) =>
             ["/empleados", "/horarios", "/vacaciones", "/compensatorios"].includes(to) ? (
               <SectionNav key={to} base={to} label={label} icon={Icon} />
-            ) : to === "/marcaciones" ? (
-              <SectionNav key={to} base={to} label={label} icon={Icon} extra={[{ slug: UNMAPPED_SLUG, label: "Sin empleado" }]} />
             ) : (
               <NavLink key={to} to={to} end={to === "/"}>
                 <Icon />

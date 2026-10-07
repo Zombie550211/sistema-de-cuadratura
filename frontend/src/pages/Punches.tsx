@@ -7,10 +7,8 @@ import { RowMenu, type RowAction } from "../components/RowMenu";
 import {
   api,
   ApiError,
-  AREAS,
   LATE_ALLOWANCE,
   localName,
-  type Area,
   type Employee,
   type ImportBatch,
   type Lateness,
@@ -37,7 +35,16 @@ interface DayRow {
   ignored: number;
 }
 
-type View = "lista" | "dia";
+/** Una persona (empleado, o huella del reloj sin empleado) con sus días marcados en la semana. */
+interface PersonRow {
+  key: string;
+  badge: string;
+  employeeId: number | null;
+  name: string | null;
+  code: string | null;
+  days: DayRow[];
+}
+
 type Dialog = { kind: "edit" | "delete" | "link"; row: DayRow } | null;
 
 function entry(punches: Punch[]) {
@@ -53,12 +60,9 @@ function punchRole(r: DayRow, p: Punch): { cls: string; title: string } {
   return { cls: " middle" + cls, title: "No cuenta: solo vale la primera marca del día" + edited };
 }
 
-/** Marcaciones de una sección (como Empleados; `area` null = IDs del reloj sin empleado), con una
- *  pestaña por local y dos vistas: lista (una fila por persona y día con su hora de entrada y
- *  huella) y por día (cada marca como chip, con la entrada resaltada). */
-export function Punches({ area }: { area: Area | null }) {
-  const section = area ? AREAS.find((a) => a.area === area)!.label : "Sin empleado";
-  const sectionQuery = area ? { area } : { only_unmapped: true };
+/** Marcaciones de todos los empleados, con una pestaña por local: una fila por persona y, al
+ *  tocarla, una ventana con sus marcas de la semana día por día (la entrada resaltada). */
+export function Punches() {
   const [params, setParams] = useSearchParams();
   const { can } = useAuth();
   const canEdit = can("admin", "rrhh");
@@ -70,10 +74,10 @@ export function Punches({ area }: { area: Area | null }) {
   const to = addDays(week, 6);
   const [search, setSearch] = useState("");
   const [showDoubles, setShowDoubles] = useState(true);
-  const [view, setView] = useState<View>("lista");
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
 
-  const locales = useAsync(() => api.get<Locales>("/attendance/locales", sectionQuery), [area]);
+  const locales = useAsync(() => api.get<Locales>("/attendance/locales"), []);
   const tabs = (locales.data?.devices ?? []).filter((d) => d.punches > 0);
   const [lastDevice, setLastDevice] = useState<number | null>(null);
   const wanted = Number(params.get("local")) || lastDevice;
@@ -102,24 +106,21 @@ export function Punches({ area }: { area: Area | null }) {
             date_to: to,
             device_id: deviceId,
             include_double_taps: showDoubles,
-            ...sectionQuery,
-            limit: 2000,
+            limit: 10000,
           })
         : Promise.resolve({ items: [], total: 0 }),
-    [from, to, deviceId, showDoubles, area],
+    [from, to, deviceId, showDoubles],
   );
 
-  // Llegadas tarde de la semana (solo en las secciones con empleados).
-  const late = useAsync(
-    () => (area ? api.get<Lateness[]>("/attendance/lateness", { date_from: from, date_to: to, area }) : Promise.resolve([])),
-    [from, to, area],
-  );
+  // Llegadas tarde de la semana de todos los empleados con turno.
+  const late = useAsync(() => api.get<Lateness[]>("/attendance/lateness", { date_from: from, date_to: to }), [from, to]);
   const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
 
   function selectTab(id: number) {
     const next = new URLSearchParams(params);
     next.set("local", String(id));
     setParams(next, { replace: true });
+    setOpenKey(null);
   }
 
   function changed() {
@@ -129,13 +130,13 @@ export function Punches({ area }: { area: Area | null }) {
     late.reload();
   }
 
-  const rows = useMemo(() => {
-    const byKey = new Map<string, DayRow>();
+  const people = useMemo(() => {
+    const byDay = new Map<string, DayRow>();
     for (const p of data?.items ?? []) {
       const date = localDate(p.punched_at);
       const key = `${date}|${p.badge}`;
-      if (!byKey.has(key)) {
-        byKey.set(key, {
+      if (!byDay.has(key)) {
+        byDay.set(key, {
           key,
           date,
           badge: p.badge,
@@ -148,63 +149,48 @@ export function Punches({ area }: { area: Area | null }) {
           ignored: 0,
         });
       }
-      byKey.get(key)!.punches.push(p);
+      byDay.get(key)!.punches.push(p);
     }
-    const q = search.trim().toLowerCase();
-    const list = [...byKey.values()]
-      .filter((r) => !q || r.badge === q || !!r.name?.toLowerCase().includes(q) || !!r.code?.toLowerCase().includes(q))
-      .map((r) => {
-        const punches = [...r.punches].sort((a, b) => a.punched_at.localeCompare(b.punched_at));
-        return { ...r, punches, ...entry(punches) };
-      });
+    const byPerson = new Map<string, PersonRow>();
+    for (const d of byDay.values()) {
+      const punches = [...d.punches].sort((a, b) => a.punched_at.localeCompare(b.punched_at));
+      const day = { ...d, punches, ...entry(punches) };
+      const key = day.employeeId ? `e${day.employeeId}` : `b${day.badge}`;
+      if (!byPerson.has(key)) {
+        byPerson.set(key, { key, badge: day.badge, employeeId: day.employeeId, name: day.name, code: day.code, days: [] });
+      }
+      byPerson.get(key)!.days.push(day);
+    }
+    const list = [...byPerson.values()];
+    for (const p of list) p.days.sort((a, b) => a.date.localeCompare(b.date));
     list.sort(
       (a, b) =>
-        a.date.localeCompare(b.date) ||
         Number(!a.name) - Number(!b.name) ||
         (a.name ?? "").localeCompare(b.name ?? "") ||
         a.badge.localeCompare(b.badge, undefined, { numeric: true }),
     );
     return list;
-  }, [data, search]);
+  }, [data]);
 
-  const days = useMemo(() => {
-    const byDate = new Map<string, DayRow[]>();
-    for (const r of rows) byDate.set(r.date, [...(byDate.get(r.date) ?? []), r]);
-    return [...byDate.entries()];
-  }, [rows]);
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return people.filter((r) => !q || r.badge === q || !!r.name?.toLowerCase().includes(q) || !!r.code?.toLowerCase().includes(q));
+  }, [people, search]);
 
-  function actions(r: DayRow): RowAction[] {
-    const list: RowAction[] = [{ label: "Editar marcas", onClick: () => setDialog({ kind: "edit", row: r }) }];
-    if (!r.name) list.push({ label: "Asignar a un empleado", onClick: () => setDialog({ kind: "link", row: r }) });
-    list.push({ label: "Eliminar marcas del día", danger: true, onClick: () => setDialog({ kind: "delete", row: r }) });
-    return list;
+  const open = people.find((p) => p.key === openKey) ?? null;
+
+  function lateSummary(p: PersonRow) {
+    const list = p.employeeId ? p.days.map((d) => lateByKey.get(`${p.employeeId}|${d.date}`)).filter((l) => !!l?.late_minutes) : [];
+    return { days: list.length, counted: list.reduce((sum, l) => sum + (l?.counted_minutes ?? 0), 0) };
   }
-
-  const agentCell = (r: DayRow) =>
-    r.name ? (
-      <>
-        <div>{r.name}</div>
-        <div className="caption">{r.code}</div>
-      </>
-    ) : (
-      <span className="badge warn">ID {r.badge} sin empleado</span>
-    );
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
-          <span className="caption">Marcaciones</span>
-          <h1>{section}</h1>
-          <p>{!area && "IDs del reloj que aún no tienen empleado: asígnelos desde el menú ⋯ de cada fila. "}Hora de El Salvador. Solo cuenta la primera marca del día (la entrada); las demás no cuentan. Las tachadas son dobles marcas.</p>
-        </div>
-        <div className="chips">
-          <button className={`btn sm${view === "lista" ? "" : " ghost"}`} onClick={() => setView("lista")}>
-            Lista
-          </button>
-          <button className={`btn sm${view === "dia" ? "" : " ghost"}`} onClick={() => setView("dia")}>
-            Por día
-          </button>
+          <span className="caption">Asistencia</span>
+          <h1>Marcaciones</h1>
+          <p>Toque a una persona para ver sus marcas de la semana. Hora de El Salvador. Solo cuenta la primera marca del día (la entrada); las tachadas son dobles marcas.</p>
         </div>
       </div>
 
@@ -254,92 +240,158 @@ export function Punches({ area }: { area: Area | null }) {
 
       {error && <div className="alert">{error}</div>}
       {data && data.total > data.items.length && (
-        <div className="alert info">Mostrando {data.items.length} de {data.total} marcas. Acorte el rango de fechas para ver todas.</div>
+        <div className="alert info">Mostrando {data.items.length} de {data.total} marcas de la semana.</div>
       )}
 
       {loading && !data ? (
         <div className="center-screen" style={{ minHeight: 200 }}>
           <div className="spinner" />
         </div>
-      ) : rows.length === 0 ? (
-        <div className="card empty">{tabs.length ? "No hay marcaciones en este rango." : `No hay marcaciones de ${section.toLowerCase()}.`}</div>
-      ) : view === "lista" ? (
+      ) : shown.length === 0 ? (
+        <div className="card empty">{tabs.length ? (search ? "Nadie coincide con la búsqueda." : "No hay marcaciones en esta semana.") : "Aún no hay marcaciones."}</div>
+      ) : (
         <div className="card">
           <div className="card-head">
-            <h3>Entradas</h3>
-            <span className="caption">{rows.length} registros</span>
+            <h3>Empleados</h3>
+            <span className="caption">{shown.length} personas</span>
           </div>
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
-                  <th>Agente</th>
-                  <th>Día</th>
-                  <th>Hora de entrada</th>
-                  {area && <th title={`Entrada vs. inicio del turno. Se perdonan ${LATE_ALLOWANCE} min por quincena.`}>Llegada tarde</th>}
+                  <th>Empleado</th>
                   <th>Huella</th>
-                  {canEdit && <th className="row-actions" />}
+                  <th>Días con marca</th>
+                  <th title={`Días que entró después del inicio del turno. Se perdonan ${LATE_ALLOWANCE} min por quincena.`}>Llegadas tarde</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={r.key}>
-                    <td>{agentCell(r)}</td>
-                    <td className="nowrap">{fmtLongDate(r.date)}</td>
-                    <td className="nowrap">
-                      {r.checkIn ? (
-                        <span className={`punch${punchRole(r, r.checkIn).cls}`} title={punchRole(r, r.checkIn).title}>
-                          {fmtTimeSec(r.checkIn.punched_at)}
-                        </span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                      {r.ignored > 0 && (
-                        <div
-                          className="caption"
-                          title={r.punches
-                            .filter((p) => !p.is_double_tap && p.id !== r.checkIn?.id)
-                            .map((p) => fmtTimeSec(p.punched_at))
-                            .join(", ")}
-                        >
-                          +{r.ignored} marca{r.ignored === 1 ? "" : "s"} más (no cuenta{r.ignored === 1 ? "" : "n"})
-                        </div>
-                      )}
-                    </td>
-                    {area && <LateCell late={r.employeeId ? lateByKey.get(`${r.employeeId}|${r.date}`) : undefined} />}
-                    <td>
-                      <span className="badge accent" title="N° de huella (ID en el reloj)">
-                        {r.badge}
-                      </span>
-                    </td>
-                    {canEdit && (
-                      <td className="num row-actions">
-                        <RowMenu actions={actions(r)} />
+                {shown.map((p) => {
+                  const ls = lateSummary(p);
+                  return (
+                    <tr
+                      key={p.key}
+                      className="clickable"
+                      tabIndex={0}
+                      onClick={() => setOpenKey(p.key)}
+                      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpenKey(p.key))}
+                    >
+                      <td>
+                        {p.name ? (
+                          <>
+                            <div>{p.name}</div>
+                            <div className="caption">{p.code}</div>
+                          </>
+                        ) : (
+                          <span className="badge warn">ID {p.badge} sin empleado</span>
+                        )}
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td>
+                        <span className="badge accent" title="N° de huella (ID en el reloj)">
+                          {p.badge}
+                        </span>
+                      </td>
+                      <td>{p.days.length} de 7</td>
+                      <td className="nowrap">
+                        {ls.days === 0 ? (
+                          <span className="muted">—</span>
+                        ) : (
+                          <>
+                            <span className={`badge${ls.counted ? " danger" : ""}`}>
+                              {ls.days} día{ls.days === 1 ? "" : "s"}
+                            </span>
+                            {ls.counted > 0 && <div className="caption">{fmtMinutes(ls.counted)} cuentan como tarde</div>}
+                          </>
+                        )}
+                      </td>
+                      <td className="num">
+                        <IconChevronRight width={18} height={18} className="muted" />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
-      ) : (
-        days.map(([date, dayRows]) => (
-          <div className="card" key={date}>
-            <div className="card-head">
-              <h3>{fmtLongDate(date)}</h3>
-              <span className="caption">{dayRows.length} personas</span>
-            </div>
-            <div className="table-wrap">
-              <table className="table">
-                <tbody>
-                  {dayRows.map((r) => (
-                    <tr key={r.key}>
-                      <td style={{ width: 260 }}>
-                        {agentCell(r)}
-                        {r.name && <div className="caption">Huella {r.badge}</div>}
-                      </td>
-                      <td>
+      )}
+
+      {open && !dialog && (
+        <PersonWeek
+          person={open}
+          week={week}
+          lateByKey={lateByKey}
+          canEdit={canEdit}
+          onAction={setDialog}
+          onClose={() => setOpenKey(null)}
+        />
+      )}
+      {dialog?.kind === "edit" && <EditDay row={dialog.row} onChanged={reload} onDone={changed} />}
+      {dialog?.kind === "link" && <LinkBadge row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
+      {dialog?.kind === "delete" && <DeleteDay row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
+    </div>
+  );
+}
+
+/** Ventana con la semana de una persona: los 7 días, sus marcas y la llegada tarde de cada uno. */
+function PersonWeek({
+  person,
+  week,
+  lateByKey,
+  canEdit,
+  onAction,
+  onClose,
+}: {
+  person: PersonRow;
+  week: string;
+  lateByKey: Map<string, Lateness>;
+  canEdit: boolean;
+  onAction: (d: Dialog) => void;
+  onClose: () => void;
+}) {
+  const byDate = new Map(person.days.map((d) => [d.date, d]));
+  const dates = Array.from({ length: 7 }, (_, i) => addDays(week, i));
+
+  function actions(r: DayRow): RowAction[] {
+    const list: RowAction[] = [{ label: "Editar marcas", onClick: () => onAction({ kind: "edit", row: r }) }];
+    if (!r.name) list.push({ label: "Asignar a un empleado", onClick: () => onAction({ kind: "link", row: r }) });
+    list.push({ label: "Eliminar marcas del día", danger: true, onClick: () => onAction({ kind: "delete", row: r }) });
+    return list;
+  }
+
+  return (
+    <Modal title={person.name ?? `ID ${person.badge} sin empleado`} onClose={onClose} wide>
+      <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
+        {person.code && `${person.code} · `}Huella {person.badge} · {fmtWeek(week)}
+      </p>
+      {!person.name && canEdit && (
+        <div className="alert info" style={{ marginBottom: 16 }}>
+          Esta huella no tiene empleado.{" "}
+          <button className="btn sm" onClick={() => onAction({ kind: "link", row: person.days[0] })}>
+            Asignar a un empleado
+          </button>
+        </div>
+      )}
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Día</th>
+              <th>Marcas</th>
+              {person.employeeId && <th>Llegada tarde</th>}
+              {canEdit && <th className="row-actions" />}
+            </tr>
+          </thead>
+          <tbody>
+            {dates.map((date) => {
+              const r = byDate.get(date);
+              return (
+                <tr key={date}>
+                  <td className="nowrap">{fmtLongDate(date)}</td>
+                  <td>
+                    {r ? (
+                      <>
                         <div className="punch-list">
                           {r.punches.map((p, i) => {
                             const role = punchRole(r, p);
@@ -350,25 +402,31 @@ export function Punches({ area }: { area: Area | null }) {
                             );
                           })}
                         </div>
-                      </td>
-                      {canEdit && (
-                        <td className="num row-actions">
-                          <RowMenu actions={actions(r)} />
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ))
-      )}
-
-      {dialog?.kind === "edit" && <EditDay row={dialog.row} onChanged={reload} onDone={changed} />}
-      {dialog?.kind === "link" && <LinkBadge row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
-      {dialog?.kind === "delete" && <DeleteDay row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
-    </div>
+                        {r.ignored > 0 && (
+                          <div className="caption">
+                            +{r.ignored} marca{r.ignored === 1 ? "" : "s"} después de la entrada (no cuenta{r.ignored === 1 ? "" : "n"})
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <span className="muted">Sin marcas</span>
+                    )}
+                  </td>
+                  {person.employeeId &&
+                    (r ? <LateCell late={lateByKey.get(`${person.employeeId}|${date}`)} /> : <td className="nowrap"><span className="muted">—</span></td>)}
+                  {canEdit && <td className="num row-actions">{r && <RowMenu actions={actions(r)} />}</td>}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="modal-foot">
+        <button className="btn" onClick={onClose}>
+          Cerrar
+        </button>
+      </div>
+    </Modal>
   );
 }
 
