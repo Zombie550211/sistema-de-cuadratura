@@ -20,7 +20,7 @@ import {
   type Sync,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { addDays, fmtDateTime, fmtLongDate, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
+import { addDays, fmtDateTime, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
@@ -231,20 +231,26 @@ export function Schedules({ area }: { area: Area }) {
   return (
     <div className="page sch">
       <div className="sch-kicker">Horarios · {section}</div>
-      <div className="page-head">
-        <h1 className="sch-title">{fmtLongDate(day)}</h1>
-        <div className="row">
-          <button className="btn ghost" onClick={() => setTemplatesOpen(true)}>
-            Turnos base
-          </button>
-          {canEdit && (
-            <button className="btn" onClick={() => setAssigning(true)} disabled={!employees.data?.items.length}>
-              <IconPlus /> Asignar horario
+
+      {/* KPIs: personas en turno por día de la semana elegida. */}
+      <div className="sch-days">
+        {days.map((d, i) => {
+          const on = visible.filter((e) => byKey.has(`${e.id}|${d}`)).length;
+          return (
+            <button key={d} className={`sch-day${i === dayIndex ? " on" : ""}`} onClick={() => setDayIndex(i)}>
+              <span className="sch-day-top">
+                <b>
+                  {DOW[i]} {d.slice(8)}
+                </b>
+                {d === today() && <i>Hoy</i>}
+              </span>
+              <span className="caption">{on} en turno</span>
             </button>
-          )}
-        </div>
+          );
+        })}
       </div>
 
+      {/* Una sola barra: semana, filtros y acciones. */}
       <div className="sch-toolbar">
         <div className="row" style={{ gap: 4 }}>
           <button className="icon-btn" onClick={() => setStart(addDays(start, -7))} aria-label="Semana anterior">
@@ -282,23 +288,14 @@ export function Schedules({ area }: { area: Area }) {
           ))}
         </select>
         <input className="input" style={{ width: 200 }} placeholder="Buscar persona o ID" value={query} onChange={(e) => setQuery(e.target.value)} />
-      </div>
-
-      <div className="sch-days">
-        {days.map((d, i) => {
-          const on = visible.filter((e) => byKey.has(`${e.id}|${d}`)).length;
-          return (
-            <button key={d} className={`sch-day${i === dayIndex ? " on" : ""}`} onClick={() => setDayIndex(i)}>
-              <span className="sch-day-top">
-                <b>
-                  {DOW[i]} {d.slice(8)}
-                </b>
-                {d === today() && <i>Hoy</i>}
-              </span>
-              <span className="caption">{on} en turno</span>
-            </button>
-          );
-        })}
+        <button className="btn ghost" onClick={() => setTemplatesOpen(true)}>
+          Turnos base
+        </button>
+        {canEdit && (
+          <button className="btn" onClick={() => setAssigning(true)} disabled={!employees.data?.items.length}>
+            <IconPlus /> Asignar horario
+          </button>
+        )}
       </div>
 
       <div className="sch-legend">
@@ -640,6 +637,8 @@ export function AssignModal({
   defaultTo,
   initialSelected = [],
   initialMode = "turno",
+  initialWeekdays = [0, 1, 2, 3, 4],
+  initialNotes = "",
   onClose,
   onDone,
 }: {
@@ -649,6 +648,8 @@ export function AssignModal({
   defaultTo: string;
   initialSelected?: number[];
   initialMode?: "turno" | "vacacion" | "compensatorio";
+  initialWeekdays?: number[];
+  initialNotes?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -656,14 +657,14 @@ export function AssignModal({
   const [search, setSearch] = useState("");
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
-  const [weekdays, setWeekdays] = useState<number[]>([0, 1, 2, 3, 4]);
+  const [weekdays, setWeekdays] = useState<number[]>(initialWeekdays);
   const [templateId, setTemplateId] = useState<string>(templates[0] ? String(templates[0].id) : "custom");
   const [startTime, setStartTime] = useState("08:00");
   const [endTime, setEndTime] = useState("17:00");
   const [breakMin, setBreakMin] = useState(60);
   const [overwrite, setOverwrite] = useState(false);
   const [mode, setMode] = useState(initialMode);
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState(initialNotes);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
