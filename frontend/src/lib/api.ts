@@ -51,25 +51,28 @@ export function groupByTeam<T extends { department: Department | null; is_superv
 
 export const SECTION_LABEL = { residencial: "Residencial", lineas: "Líneas" } as const;
 
-export interface SectionGroup<T> {
+export interface PositionGroup<T> {
   key: string;
-  section: Department["section"] | null;
+  /** Cargo tal como viene en la planilla ("Agente de ventas", "Bo"…); null = sin cargo. */
+  position: string | null;
   items: T[];
 }
 
-/** Agrupa por sección (Residencial, Líneas y al final los que no tienen team), sin teams:
- *  dentro de cada sección, por nombre. La sección sale del team que manda el CRM. */
-export function groupBySection<T extends { department: Department | null; full_name: string }>(items: T[]) {
-  const order = ["residencial", "lineas", null] as const;
-  return order
-    .map((section) => ({
-      key: section ?? "none",
-      section,
-      items: items
-        .filter((e) => (e.department?.section ?? null) === section)
-        .sort((a, b) => a.full_name.localeCompare(b.full_name, "es")),
-    }))
-    .filter((g) => g.items.length) as SectionGroup<T>[];
+/** Agrupa por cargo (Empleados va por cargo de la planilla; Horarios, por team del CRM).
+ *  Cargos por nombre y "Sin cargo" al final; dentro de cada uno, por nombre. */
+export function groupByPosition<T extends { position: string | null; full_name: string }>(items: T[]) {
+  const byKey = new Map<string, PositionGroup<T>>();
+  for (const item of items) {
+    const position = item.position?.trim() || null;
+    const key = position?.toLowerCase() ?? "";
+    if (!byKey.has(key)) byKey.set(key, { key: key || "none", position, items: [] });
+    byKey.get(key)!.items.push(item);
+  }
+  const groups = [...byKey.values()].sort((a, b) =>
+    a.position === null ? 1 : b.position === null ? -1 : a.position.localeCompare(b.position, "es"),
+  );
+  for (const g of groups) g.items.sort((a, b) => a.full_name.localeCompare(b.full_name, "es"));
+  return groups;
 }
 
 export type Area = "administrativo" | "operativo" | "ventas";

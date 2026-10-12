@@ -9,7 +9,6 @@ import {
   api,
   AREAS,
   DAY_OFF_LABEL,
-  groupBySection,
   groupByTeam,
   SECTION_LABEL,
   type Area,
@@ -124,14 +123,11 @@ export function Schedules({ area }: { area: Area }) {
     return map;
   }, [punches.data]);
 
-  // Agentes de ventas: solo por sección (Residencial / Líneas), sin teams. El resto, por team.
-  const bySection = area === "ventas";
-  const allGroups = useMemo(() => {
-    const items = employees.data?.items ?? [];
-    return bySection
-      ? groupBySection(items).map((g) => ({ ...g, label: g.section ? SECTION_LABEL[g.section] : "Sin team" }))
-      : groupByTeam(items).map((g) => ({ key: g.key, section: g.team?.section ?? null, label: g.team?.name ?? "Sin team", items: g.items }));
-  }, [employees.data, bySection]);
+  // Por team, en el orden en que los manda el CRM (supervisor primero).
+  const allGroups = useMemo(
+    () => groupByTeam(employees.data?.items ?? []).map((g) => ({ key: g.key, section: g.team?.section ?? null, label: g.team?.name ?? "Sin team", items: g.items })),
+    [employees.data],
+  );
   const q = query.trim().toLowerCase();
   const groups = allGroups
     .filter((g) => team === "all" || g.key === team)
@@ -298,8 +294,8 @@ export function Schedules({ area }: { area: Area }) {
       {/* Una sola barra: filtros y acciones. */}
       <div className="sch-toolbar">
         <div className="spacer" />
-        <select className="input" style={{ width: 200 }} value={team} onChange={(e) => setTeam(e.target.value)} aria-label={bySection ? "Filtrar por sección" : "Filtrar por team"}>
-          <option value="all">{bySection ? "Todas las secciones" : "Todos los teams"}</option>
+        <select className="input" style={{ width: 200 }} value={team} onChange={(e) => setTeam(e.target.value)} aria-label="Filtrar por team">
+          <option value="all">Todos los teams</option>
           {allGroups.map((g) => (
             <option key={g.key} value={g.key}>
               {g.label}
@@ -387,7 +383,7 @@ export function Schedules({ area }: { area: Area }) {
 
           {groups.map((g) => {
             const section = g.section;
-            const showSection = !bySection && section !== null && section !== lastSection;
+            const showSection = section !== null && section !== lastSection;
             lastSection = section;
             const open = teams.isOpen(g.key);
             const teamHours = g.items.reduce((s, e) => s + weekHours(e), 0);
@@ -404,7 +400,6 @@ export function Schedules({ area }: { area: Area }) {
                   <div className="sch-team-head">
                     <button className={`sch-team-toggle${open ? "" : " closed"}`} onClick={() => teams.toggle(g.key)} aria-expanded={open}>
                       <IconChevronDown width={14} height={14} />
-                      {bySection && section && <SectionIcon width={14} height={14} />}
                       <span>{g.label}</span>
                     </button>
                     <span className="muted">

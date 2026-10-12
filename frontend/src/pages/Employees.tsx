@@ -1,11 +1,11 @@
 import { Fragment, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { IconLink, IconPlus } from "../components/Icons";
+import { IconChevronDown, IconLink, IconPlus } from "../components/Icons";
 import { RosterImport } from "../components/RosterImport";
 import { ConfirmDelete, RowMenu } from "../components/RowMenu";
-import { SectionBanner, TeamHeader, useCollapsedTeams } from "../components/TeamGroups";
-import { api, AREAS, DOCS, groupByTeam, type Area, type Department, type Employee, type EmployeeInput, type Page, type ShiftTemplate, type UnmappedBadge } from "../lib/api";
+import { useCollapsedTeams } from "../components/TeamGroups";
+import { api, AREAS, DOCS, groupByPosition, type Area, type Department, type Employee, type EmployeeInput, type Page, type ShiftTemplate, type UnmappedBadge } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { addDays, fmtDate, fmtDateTime, fmtMoney, seniority, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
@@ -28,7 +28,8 @@ export function Employees({ area }: { area: Area }) {
   const [importing, setImporting] = useState(false);
   const [deleting, setDeleting] = useState<Employee | null>(null);
   const showUnmapped = params.get("vincular") === "1";
-  const teams = useCollapsedTeams(`empleados.${area}.teams-plegados`);
+  // Empleados va por cargo de la planilla (Horarios, en cambio, por team del CRM).
+  const groups = useCollapsedTeams(`empleados.${area}.cargos-plegados`);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [assigning, setAssigning] = useState(false);
   const COLS = canEdit ? 12 : 10;
@@ -171,21 +172,22 @@ export function Employees({ area }: { area: Area }) {
               </tr>
             </thead>
             <tbody>
-              {groupByTeam(list.data?.items ?? []).map((g) => (
+              {groupByPosition(list.data?.items ?? []).map((g) => (
                 <Fragment key={g.key}>
-                {g.newSection && g.team && (
-                  <tr className="section-row">
-                    <td colSpan={COLS}>
-                      <SectionBanner group={g} />
-                    </td>
-                  </tr>
-                )}
                 <tr className="team-row">
                   <td colSpan={COLS}>
-                    <TeamHeader group={g} open={teams.isOpen(g.key)} onToggle={() => teams.toggle(g.key)} />
+                    <div className={`team-head-in${groups.isOpen(g.key) ? "" : " closed"}`}>
+                      <button type="button" className="team-toggle" onClick={() => groups.toggle(g.key)} aria-expanded={groups.isOpen(g.key)} aria-label={`Mostrar u ocultar ${g.position ?? "Sin cargo"}`}>
+                        <IconChevronDown width={14} height={14} />
+                      </button>
+                      <span className="team-name">{g.position ?? "Sin cargo"}</span>
+                      <span className="team-meta">
+                        {g.items.length} empleado{g.items.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
                   </td>
                 </tr>
-                {teams.isOpen(g.key) && g.items.map((e) => (
+                {groups.isOpen(g.key) && g.items.map((e) => (
                 <tr key={e.id} className="clickable" onClick={() => navigate(`/empleados/${e.id}`)}>
                   {canEdit && (
                     <td onClick={(ev) => ev.stopPropagation()}>
