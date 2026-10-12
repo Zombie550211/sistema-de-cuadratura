@@ -9,6 +9,7 @@ import {
   api,
   AREAS,
   DAY_OFF_LABEL,
+  groupByPosition,
   groupByTeam,
   SECTION_LABEL,
   type Area,
@@ -123,11 +124,19 @@ export function Schedules({ area }: { area: Area }) {
     return map;
   }, [punches.data]);
 
-  // Por team, en el orden en que los manda el CRM (supervisor primero).
-  const allGroups = useMemo(
-    () => groupByTeam(employees.data?.items ?? []).map((g) => ({ key: g.key, section: g.team?.section ?? null, label: g.team?.name ?? "Sin team", items: g.items })),
-    [employees.data],
-  );
+  // Por team, en el orden en que los manda el CRM (supervisor primero); quien no tiene team
+  // (no viene del CRM: administrativos, operativos, agentes nuevos), al final por su cargo.
+  const allGroups = useMemo(() => {
+    const items = employees.data?.items ?? [];
+    const teams = groupByTeam(items.filter((e) => e.department)).map((g) => ({ key: g.key, section: g.team!.section, label: g.team!.name, items: g.items }));
+    const byPosition = groupByPosition(items.filter((e) => !e.department)).map((g) => ({
+      key: `cargo:${g.key}`,
+      section: null,
+      label: g.position ?? "Sin cargo",
+      items: g.items,
+    }));
+    return [...teams, ...byPosition];
+  }, [employees.data]);
   const q = query.trim().toLowerCase();
   const groups = allGroups
     .filter((g) => team === "all" || g.key === team)
