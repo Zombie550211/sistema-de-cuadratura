@@ -51,6 +51,27 @@ export function groupByTeam<T extends { department: Department | null; is_superv
 
 export const SECTION_LABEL = { residencial: "Residencial", lineas: "Líneas" } as const;
 
+export interface SectionGroup<T> {
+  key: string;
+  section: Department["section"] | null;
+  items: T[];
+}
+
+/** Agrupa por sección (Residencial, Líneas y al final los que no tienen team), sin teams:
+ *  dentro de cada sección, por nombre. La sección sale del team que manda el CRM. */
+export function groupBySection<T extends { department: Department | null; full_name: string }>(items: T[]) {
+  const order = ["residencial", "lineas", null] as const;
+  return order
+    .map((section) => ({
+      key: section ?? "none",
+      section,
+      items: items
+        .filter((e) => (e.department?.section ?? null) === section)
+        .sort((a, b) => a.full_name.localeCompare(b.full_name, "es")),
+    }))
+    .filter((g) => g.items.length) as SectionGroup<T>[];
+}
+
 export type Area = "administrativo" | "operativo" | "ventas";
 
 /** Las 3 secciones de Empleados, en el orden del menú, con su ruta /empleados/<slug>. */
