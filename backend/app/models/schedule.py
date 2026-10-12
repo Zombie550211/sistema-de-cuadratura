@@ -64,9 +64,9 @@ class ShiftAssignment(TimestampMixin, Base):
     template = relationship(ShiftTemplate, lazy="joined")
 
 
-DAY_OFF_KINDS = ("libre", "vacacion", "compensatorio", "incapacidad")
+DAY_OFF_KINDS = ("libre", "vacacion", "compensatorio", "incapacidad", "suspendido", "baja")
 # Días que decide RRHH y que el CRM no pisa con un turno.
-PROTECTED_KINDS = ("vacacion", "compensatorio", "incapacidad")
+PROTECTED_KINDS = ("vacacion", "compensatorio", "incapacidad", "suspendido", "baja")
 
 
 class ShiftDayOff(TimestampMixin, Base):

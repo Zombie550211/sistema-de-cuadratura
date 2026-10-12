@@ -18,6 +18,8 @@ export const DAY_OFF_COLOR: Record<DayOffKind, string> = {
   compensatorio: "#e2e8f0",
   vacacion: "#facc15",
   incapacidad: "#4ade80",
+  suspendido: "#fb923c",
+  baja: "#94a3b8",
 };
 export const NO_SHOW = { label: "No se presentó", color: "#f87171" };
 

@@ -250,13 +250,15 @@ export interface ShiftAssignment {
 }
 
 /** Día sin turno: lo fija RRHH (al reagendar o dar el día) o viene del CRM como descanso. */
-export type DayOffKind = "libre" | "vacacion" | "compensatorio" | "incapacidad";
+export type DayOffKind = "libre" | "vacacion" | "compensatorio" | "incapacidad" | "suspendido" | "baja";
 
 export const DAY_OFF_LABEL: Record<DayOffKind, string> = {
   libre: "Día libre",
   vacacion: "Vacación",
   compensatorio: "Compensatorio",
   incapacidad: "Incapacidad",
+  suspendido: "Suspendido",
+  baja: "De baja",
 };
 
 export interface ShiftDayOff {

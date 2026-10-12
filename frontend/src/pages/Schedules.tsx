@@ -13,6 +13,7 @@ import {
   groupByTeam,
   SECTION_LABEL,
   type Area,
+  type DayOffKind,
   type Employee,
   type Page,
   type Punch,
@@ -27,6 +28,14 @@ import { addDays, fmtDateTime, fmtTime, hhmm, hoursFrom, today, weekStart } from
 import { useAsync } from "../lib/useAsync";
 
 const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
+/** Tarjetas del día en el horario: lo que RRHH puede marcar en lugar de un turno. */
+const POP_DAY_OFF: [DayOffKind, string][] = [
+  ["libre", "Día libre"],
+  ["compensatorio", "Compensatorio"],
+  ["suspendido", "Suspendido"],
+  ["baja", "De baja"],
+  ["incapacidad", "Incapacidad"],
+];
 const DOW = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 /** Por debajo de este número de agentes en turno, la hora se marca como descubierta. */
 const MIN_COVERAGE = 4;
@@ -225,9 +234,10 @@ export function Schedules({ area }: { area: Area }) {
     return popAction(() => api.delete(`/schedules/assignments/${pop.current!.id}`));
   }
 
-  function giveDayOff() {
+  /** Marca el día (libre, compensatorio, suspendido…): quita el turno y, si ya había otro tipo, lo cambia. */
+  function giveDayOff(kind: DayOffKind) {
     if (!pop) return;
-    return popAction(() => api.post("/schedules/days-off", { employee_id: pop.employee.id, work_date: pop.day }));
+    return popAction(() => api.post("/schedules/days-off", { employee_id: pop.employee.id, work_date: pop.day, kind }));
   }
 
   function removeDayOff() {
@@ -321,6 +331,8 @@ export function Schedules({ area }: { area: Area }) {
             ["Libre", DAY_OFF_COLOR.libre],
             ["Vacaciones", DAY_OFF_COLOR.vacacion],
             ["Incapacidad", DAY_OFF_COLOR.incapacidad],
+            ["Suspendido", DAY_OFF_COLOR.suspendido],
+            ["De baja", DAY_OFF_COLOR.baja],
             [NO_SHOW.label, NO_SHOW.color],
           ] as const
         ).map(([label, color]) => (
@@ -522,11 +534,12 @@ export function Schedules({ area }: { area: Area }) {
                   Quitar turno del día
                 </button>
               )}
-              {!pop.dayOff && (
-                <button className="btn ghost sm" disabled={busy} onClick={giveDayOff}>
-                  Dar día libre
+              {POP_DAY_OFF.filter(([kind]) => kind !== pop.dayOff?.kind).map(([kind, label]) => (
+                <button key={kind} className="btn ghost sm" disabled={busy} onClick={() => giveDayOff(kind)}>
+                  <span className="swatch" style={{ background: DAY_OFF_COLOR[kind], borderRadius: 4, marginRight: 6 }} />
+                  {label}
                 </button>
-              )}
+              ))}
               {pop.dayOff && (
                 <button className="btn ghost sm" disabled={busy} onClick={removeDayOff}>
                   Quitar {DAY_OFF_LABEL[pop.dayOff.kind].toLowerCase()}
@@ -709,7 +722,7 @@ export function AssignModal({
   defaultFrom: string;
   defaultTo: string;
   initialSelected?: number[];
-  initialMode?: "turno" | "vacacion" | "compensatorio" | "incapacidad";
+  initialMode?: "turno" | Exclude<DayOffKind, "libre">;
   initialWeekdays?: number[];
   initialNotes?: string;
   onClose: () => void;
@@ -791,6 +804,8 @@ export function AssignModal({
               ["vacacion", "Vacación"],
               ["compensatorio", "Día compensatorio"],
               ["incapacidad", "Incapacidad"],
+              ["suspendido", "Suspendido"],
+              ["baja", "De baja"],
             ] as const
           ).map(([value, label]) => (
             <button key={value} type="button" role="radio" aria-checked={mode === value} className={`btn sm${mode === value ? "" : " ghost"}`} onClick={() => setMode(value)}>
@@ -800,7 +815,7 @@ export function AssignModal({
         </div>
         {mode !== "turno" && (
           <div className="caption">
-            Los días elegidos quedan como {mode === "vacacion" ? "vacación" : mode === "incapacidad" ? "incapacidad" : "día compensatorio"}: se quita el turno que hubiera y quedan como descanso también en el horario del CRM.
+            Los días elegidos quedan como {mode === "compensatorio" ? "día compensatorio" : DAY_OFF_LABEL[mode].toLowerCase()}: se quita el turno que hubiera y quedan como descanso también en el horario del CRM.
           </div>
         )}
         {error && <div className="alert">{error}</div>}

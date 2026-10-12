@@ -30,7 +30,13 @@ log = logging.getLogger("asistencia.crm_push")
 
 # Así los reconoce /horarios.html del CRM: descanso con nota "Vacaciones" o "Incapacidad" (exacta);
 # cualquier otro descanso es "Libre" (con su nota, si tiene).
-CRM_NOTE = {"vacacion": "Vacaciones", "incapacidad": "Incapacidad", "compensatorio": "Compensatorio"}
+CRM_NOTE = {
+    "vacacion": "Vacaciones",
+    "incapacidad": "Incapacidad",
+    "compensatorio": "Compensatorio",
+    "suspendido": "Suspendido",
+    "baja": "De baja",
+}
 BATCH = 500
 
 

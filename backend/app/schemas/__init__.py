@@ -274,7 +274,7 @@ class ShiftUpdateIn(BaseModel):
         return self
 
 
-DayOffKind = Literal["libre", "vacacion", "compensatorio", "incapacidad"]
+DayOffKind = Literal["libre", "vacacion", "compensatorio", "incapacidad", "suspendido", "baja"]
 
 
 class ShiftDayOffIn(BaseModel):
@@ -300,7 +300,7 @@ class LeaveBulkIn(BaseModel):
     date_from: date
     date_to: date
     weekdays: list[int] = Field(default=[0, 1, 2, 3, 4, 5], description="0=lunes … 6=domingo")
-    kind: Literal["vacacion", "compensatorio", "incapacidad"]
+    kind: Literal["vacacion", "compensatorio", "incapacidad", "suspendido", "baja"]
     notes: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")

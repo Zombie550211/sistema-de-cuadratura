@@ -523,3 +523,32 @@ def test_push_uses_crm_labels(db):
     db.flush()
     notes = [_change(db, "9", emp.id, date(2026, 10, 5 + i))["notes"] for i in range(3)]
     assert notes == ["Vacaciones", "Incapacidad", "Permiso"]
+
+
+def test_suspension_and_leave_kinds(crm, db):
+    from datetime import date
+
+    from app.models import CrmOutbox, ShiftDayOff
+    from app.services.crm_push import _change
+
+    client, headers = crm
+    _hire(client)
+    emp_id = _send(client, headers, [_agent()]).json()["agents"][0]["employee_id"]
+    # RRHH suspende el lunes desde el horario: se quita el turno
+    r = client.post("/api/schedules/days-off", json={"employee_id": emp_id, "work_date": "2026-10-05", "kind": "suspendido"})
+    assert r.status_code == 201 and r.json()["kind"] == "suspendido"
+    assert _hours(client, "2026-10-05") == []
+    off = db.get(ShiftDayOff, r.json()["id"])
+    assert _change(db, "A-100", emp_id, date(2026, 10, 5))["notes"] == "Suspendido"
+
+    # el CRM vuelve a poner turno: la suspensión de RRHH no se pisa
+    db.query(CrmOutbox).delete()
+    db.commit()
+    agent = _agent()
+    agent["shifts"].append({"date": "2026-10-08", "rest_day": True, "notes": "De baja"})
+    body = _send(client, headers, [agent]).json()
+    assert body["agents"][0]["conflict_dates"] == ["2026-10-05"]
+    db.refresh(off)
+    assert off.kind == "suspendido"
+    offs = {d["work_date"]: d["kind"] for d in client.get("/api/schedules/days-off", params=WEEK).json()}
+    assert offs["2026-10-08"] == "baja"

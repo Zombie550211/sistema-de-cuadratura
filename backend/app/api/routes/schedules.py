@@ -253,7 +253,7 @@ def list_days_off(
     _: Staff,
     date_from: date,
     date_to: date,
-    kind: Annotated[str | None, Query(pattern="^(libre|vacacion|compensatorio|incapacidad)$")] = None,
+    kind: Annotated[str | None, Query(pattern="^(libre|vacacion|compensatorio|incapacidad|suspendido|baja)$")] = None,
 ):
     """Días sin turno fijados por RRHH. Filtrando por tipo (vacación o compensatorio) se puede
     pedir hasta un año completo, para las secciones de Vacaciones y Compensatorios."""

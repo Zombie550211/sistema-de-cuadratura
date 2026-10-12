@@ -18,10 +18,10 @@ CRM solo manda horarios. Reglas:
   rest_day=true queda libre), también si RRHH lo había cambiado aquí: esos cambios ya se le
   devolvieron al CRM (crm_push.py), así que si el CRM manda otra cosa es porque cambió después.
 - Un descanso del CRM (rest_day) queda aquí como día libre con su tipo, igual que en /horarios.html:
-  nota "Vacaciones" → vacación, "Incapacidad" → incapacidad, "Compensatorio" → compensatorio y
-  cualquier otro → libre. Si el CRM lo quita, se quita aquí.
+  nota "Vacaciones" → vacación, "Incapacidad" → incapacidad, "Compensatorio" → compensatorio,
+  "Suspendido" → suspendido, "De baja" → baja y cualquier otro → libre. Si el CRM lo quita, se quita aquí.
 - Excepciones: un día que RRHH cambió y aún no llegó al CRM (está en la cola crm_outbox) no se
-  toca; y una vacación, compensatorio o incapacidad que fijó RRHH no se pisa: se reporta como
+  toca; y una vacación, compensatorio, incapacidad, suspensión o baja que fijó RRHH no se pisa: se reporta como
   conflicto (si el CRM puso turno) y se le vuelve a enviar al CRM.
 - El CRM manda los agentes ordenados por equipo (supervisor primero): esa posición se guarda en
   crm_order para listarlos igual aquí.
@@ -48,8 +48,12 @@ def rest_kind(notes: str | None) -> str:
     n = (notes or "").strip().lower()
     if n in ("vacaciones", "vacación", "vacacion"):
         return "vacacion"
-    if n in ("incapacidad", "compensatorio"):
+    if n in ("incapacidad", "compensatorio", "suspendido"):
         return n
+    if n in ("suspendida", "suspension", "suspensión"):
+        return "suspendido"
+    if n in ("de baja", "baja"):
+        return "baja"
     return "libre"
 
 
@@ -276,7 +280,7 @@ def _apply_agent(
         employee_id=employee.id,
         employee_created=False,
         message=(
-            "Estas fechas son vacación, compensatorio o incapacidad fijados por RRHH: no se puso turno y se le reenviaron al CRM"
+            "Estas fechas son vacación, compensatorio, incapacidad, suspensión o baja fijados por RRHH: no se puso turno y se le reenviaron al CRM"
             if conflicts
             else None
         ),
