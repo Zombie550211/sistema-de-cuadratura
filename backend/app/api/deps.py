@@ -28,7 +28,8 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 def require_roles(*roles: Role) -> Callable[[User], User]:
     def checker(user: CurrentUser) -> User:
-        if user.role not in roles:
+        # El administrador tiene acceso a todo, aunque el atajo no lo nombre.
+        if user.role != Role.admin and user.role not in roles:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "No tiene permiso para esta acción")
         return user
 

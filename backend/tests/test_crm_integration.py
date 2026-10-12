@@ -247,6 +247,30 @@ def test_crm_badge_fills_empty_one(crm):
     assert client.get(f"/api/employees/{emp['id']}").json()["badge_number"] == "83"
 
 
+def test_name_match_tolerates_typos(crm):
+    client, headers = crm
+    emp = _hire(client, badge=None, first="Roberto Antonio", last="Velásquez Claro")
+    _hire(client, "E-084", None, "Abigail", "Bernal")
+    _hire(client, "E-085", None, "Abigail", "Bernald")
+    body = _send(client, headers, [
+        _agent("A-1", None, first_name="Robert", last_name="Velasquez Claros."),
+        _agent("A-2", None, first_name="Abigal", last_name="Bernal"),  # parecido a los dos: ambiguo
+        _agent("A-3", None, first_name="Rob", last_name="Velasquez"),  # palabras cortas: sin tolerancia
+    ]).json()
+    assert [a["status"] for a in body["agents"]] == ["ok", "error", "error"]
+    assert "varios empleados" in body["agents"][1]["message"]
+    assert body["agents"][0]["employee_id"] == emp["id"]
+    assert client.get(f"/api/employees/{emp['id']}").json()["crm_agent_id"] == "A-1"
+
+
+def test_name_match_reports_employee_linked_to_other_agent(crm):
+    client, headers = crm
+    client.post("/api/employees", json={"code": "E-1", "first_name": "José Emilio", "last_name": "Valle Mendoza", "crm_agent_id": "179"})
+    agent = _send(client, headers, [_agent("187", None, first_name="José Emilio", last_name="Valle Mendoza")]).json()["agents"][0]
+    assert agent["status"] == "error"
+    assert "ID de CRM 179" in agent["message"] and "a 187" in agent["message"]
+
+
 def test_agent_errors_do_not_block_others(crm):
     client, headers = crm
     client.post("/api/employees", json={"code": "E-1", "first_name": "Otro", "last_name": "Agente", "badge_number": "50", "crm_agent_id": "Z-9"})
@@ -381,6 +405,29 @@ def test_employees_listed_by_team_like_crm(crm):
     assert teams == ["Team Miguel Nuñez", "Team Rosa Vides", "Team Lineas Carla"]
 
 
+def test_crm_role_marks_team_supervisor(crm):
+    client, headers = crm
+    _hire(client, "E-1", None, "Victor", "Hurtado")
+    _hire(client, "E-2", None, "Ana", "Bonilla")
+    team = "TEAM LINEAS VICTOR"
+    sent = [
+        _agent("1", None, first_name="Victor", last_name="Hurtado", campaign=team, role="Supervisor Team Lineas", shifts=[]),
+        _agent("2", None, first_name="Ana", last_name="Bonilla", campaign=team, role="Lineas-Agentes", shifts=[]),
+    ]
+    assert _send(client, headers, sent).status_code == 200
+    sup = {e["crm_agent_id"]: e["is_supervisor"] for e in client.get("/api/employees").json()["items"]}
+    assert sup == {"1": True, "2": False}
+
+    # Si el CRM le quita el rol, deja de ser supervisor; si no manda rol, no se toca.
+    sent[0]["role"] = "Agente"
+    _send(client, headers, sent)
+    assert not client.get("/api/employees").json()["items"][0]["is_supervisor"]
+    sent[0].pop("role")
+    sent[1]["role"] = "Supervisor"
+    _send(client, headers, sent)
+    assert [e["is_supervisor"] for e in client.get("/api/employees").json()["items"]] == [False, True]
+
+
 def _local(iso):
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -417,7 +464,7 @@ def test_rescheduled_shift_waits_for_crm_then_crm_wins(crm, db):
     _send(client, headers, [_agent()])
     shifts = client.get("/api/schedules/assignments", params=WEEK).json()
     assert [(s["work_date"], s["source"]) for s in shifts] == [("2026-10-05", "crm"), ("2026-10-06", "crm")]
-    assert client.get("/api/schedules/days-off", params=WEEK).json() == []
+    assert [d["work_date"] for d in client.get("/api/schedules/days-off", params=WEEK).json()] == ["2026-10-07"]  # el libre del CRM
 
 
 def test_day_off_removes_crm_shift_for_good(crm):
@@ -433,4 +480,46 @@ def test_day_off_removes_crm_shift_for_good(crm):
     # asignar un turno a mano ese día quita el día libre
     client.post("/api/schedules/assignments/bulk", json={"employee_ids": [emp_id], "date_from": "2026-10-06", "date_to": "2026-10-06",
                                                          "weekdays": [1], "start_time": "08:00", "end_time": "12:00"})
-    assert client.get("/api/schedules/days-off", params=WEEK).json() == []
+    assert [d["work_date"] for d in client.get("/api/schedules/days-off", params=WEEK).json()] == ["2026-10-07"]  # solo el libre del CRM
+
+
+def test_crm_rest_days_keep_their_type(crm):
+    client, headers = crm
+    _hire(client)
+    agent = _agent(shifts=[
+        {"date": "2026-10-05", "start": "08:00", "end": "17:00"},
+        {"date": "2026-10-06", "rest_day": True},
+        {"date": "2026-10-07", "rest_day": True, "notes": "Incapacidad"},
+        {"date": "2026-10-08", "rest_day": True, "notes": "Vacaciones"},
+    ])
+    _send(client, headers, [agent])
+    offs = {d["work_date"]: (d["kind"], d["source"]) for d in client.get("/api/schedules/days-off", params=WEEK).json()}
+    assert offs == {"2026-10-06": ("libre", "crm"), "2026-10-07": ("incapacidad", "crm"), "2026-10-08": ("vacacion", "crm")}
+
+    # el CRM cambia la incapacidad por un turno y quita el libre: aquí también
+    agent["shifts"] = [
+        {"date": "2026-10-05", "start": "08:00", "end": "17:00"},
+        {"date": "2026-10-07", "start": "08:00", "end": "17:00"},
+        {"date": "2026-10-08", "rest_day": True, "notes": "Vacaciones"},
+    ]
+    body = _send(client, headers, [agent]).json()
+    assert body["agents"][0]["conflict_dates"] == []
+    offs = {d["work_date"]: d["kind"] for d in client.get("/api/schedules/days-off", params=WEEK).json()}
+    assert offs == {"2026-10-08": "vacacion"}
+    assert [s["work_date"] for s in client.get("/api/schedules/assignments", params=WEEK).json()] == ["2026-10-05", "2026-10-07"]
+
+
+def test_push_uses_crm_labels(db):
+    from datetime import date
+
+    from app.models import Employee, ShiftDayOff
+    from app.services.crm_push import _change
+
+    emp = Employee(code="E-1", first_name="A", last_name="B", crm_agent_id="9")
+    db.add(emp)
+    db.flush()
+    for i, kind in enumerate(["vacacion", "incapacidad", "libre"]):
+        db.add(ShiftDayOff(employee_id=emp.id, work_date=date(2026, 10, 5 + i), kind=kind, notes="Permiso" if kind == "libre" else None))
+    db.flush()
+    notes = [_change(db, "9", emp.id, date(2026, 10, 5 + i))["notes"] for i in range(3)]
+    assert notes == ["Vacaciones", "Incapacidad", "Permiso"]

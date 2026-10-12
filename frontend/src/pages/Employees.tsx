@@ -14,7 +14,7 @@ import { AssignModal } from "./Schedules";
 
 type Editing = { employee: Employee | null; initial?: Partial<EmployeeInput> } | null;
 
-/** Una de las 4 secciones de Empleados (Administrativo, Operativo, Supervisores, Agentes de ventas). */
+/** Una de las 3 secciones de Empleados (Administrativo, Operativo, Agentes de ventas). */
 export function Employees({ area }: { area: Area }) {
   const section = AREAS.find((a) => a.area === area)!;
   const { can } = useAuth();
@@ -197,7 +197,7 @@ export function Employees({ area }: { area: Area }) {
                     <div className="caption">
                       {e.user_code && <b className="mono">{e.user_code} · </b>}
                       {e.code}
-                      {g.supervisor?.id === e.id && <b> · Supervisor</b>}
+                      {e.is_supervisor && <span className="badge accent sup-tag">Supervisor</span>}
                     </div>
                   </td>
                   <td className="nowrap">{e.position ?? <span className="muted">—</span>}</td>

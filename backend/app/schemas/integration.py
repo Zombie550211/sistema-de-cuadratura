@@ -40,6 +40,8 @@ class CrmAgent(BaseModel):
     last_name: str | None = Field(default=None, max_length=100)
     campaign: str | None = Field(default=None, max_length=120)
     supervisor: str | None = Field(default=None, max_length=160)
+    # Rol del usuario en el CRM ("Supervisor", "Agente"…): marca quién es el supervisor del team.
+    role: str | None = Field(default=None, max_length=80)
     hire_date: date | None = None  # informativo: la fecha de ingreso la lleva Empleados
     shifts: list[CrmShift] = Field(default_factory=list, max_length=62)
 

@@ -92,6 +92,10 @@ function App() {
         {AREAS.map((a) => (
           <Route key={a.slug} path={`empleados/${a.slug}`} element={<Guard roles={STAFF}><Employees key={a.area} area={a.area} /></Guard>} />
         ))}
+        {/* La sección Supervisores se quitó: los supervisores están en Agentes de ventas con su team. */}
+        {["horarios", "vacaciones", "compensatorios", "empleados"].map((base) => (
+          <Route key={`${base}-sup`} path={`${base}/supervisores`} element={<Navigate to={`/${base}/agentes`} replace />} />
+        ))}
         <Route path="empleados/:id" element={<Guard roles={STAFF}><EmployeeProfilePage /></Guard>} />
         <Route path="integraciones" element={<Guard roles={["admin", "rrhh"]}><Integrations /></Guard>} />
         <Route path="usuarios" element={<Guard roles={["admin"]}><Users /></Guard>} />

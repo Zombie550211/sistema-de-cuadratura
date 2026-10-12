@@ -64,7 +64,9 @@ class ShiftAssignment(TimestampMixin, Base):
     template = relationship(ShiftTemplate, lazy="joined")
 
 
-DAY_OFF_KINDS = ("libre", "vacacion", "compensatorio")
+DAY_OFF_KINDS = ("libre", "vacacion", "compensatorio", "incapacidad")
+# Días que decide RRHH y que el CRM no pisa con un turno.
+PROTECTED_KINDS = ("vacacion", "compensatorio", "incapacidad")
 
 
 class ShiftDayOff(TimestampMixin, Base):
@@ -79,6 +81,8 @@ class ShiftDayOff(TimestampMixin, Base):
     work_date: Mapped[date] = mapped_column(Date, index=True)
     kind: Mapped[str] = mapped_column(String(20), default="libre", server_default="libre")
     notes: Mapped[str | None] = mapped_column(Text)
+    # rrhh = lo fijó RRHH en Cuadratura; crm = vino del CRM como día libre/vacación/incapacidad.
+    source: Mapped[str] = mapped_column(String(16), default="rrhh", server_default="rrhh")
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 

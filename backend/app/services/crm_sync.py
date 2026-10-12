@@ -4,24 +4,31 @@ Empleados (la planilla) es la fuente oficial del personal: se registra a mano o 
 CRM solo manda horarios. Reglas:
 - El agente se identifica por crm_agent_id. Si no existe se busca por ID de reloj; después por
   nombre entre los empleados sin ID de CRM (el CRM usa nombres cortos, p.ej. "Bryan Pleitez" para
-  "Bryan Stanley Segovia Pleitez"). Al encontrarlo se le guarda el ID de CRM.
+  "Bryan Stanley Segovia Pleitez"). Si ninguno coincide exacto se tolera un error de escritura por
+  palabra ("Robert" ~ "Roberto"), siempre que quede un solo empleado. Al encontrarlo se le guarda
+  el ID de CRM.
 - Si no está en Empleados, el agente se rechaza (error): el CRM no crea fichas. RRHH lo registra y
   el CRM lo reenvía.
 - El CRM no cambia los datos de la ficha (nombre, fecha de ingreso, ID de reloj). El ID de reloj
   que manda solo se usa para encontrar al empleado, o se guarda si la ficha aún no tiene uno.
-- El team sí lo manda el CRM ("MIGUEL NUÑEZ" → "Miguel Nuñez").
+- El team sí lo manda el CRM ("MIGUEL NUÑEZ" → "Miguel Nuñez"), y el rol: si es de supervisor, el
+  empleado se etiqueta como supervisor de su team.
 - Sincronización en los dos sentidos: Horarios del CRM y de Cuadratura son iguales. Dentro del
   periodo enviado, el horario del agente queda como lo manda el CRM (una fecha sin turno o con
   rest_day=true queda libre), también si RRHH lo había cambiado aquí: esos cambios ya se le
   devolvieron al CRM (crm_push.py), así que si el CRM manda otra cosa es porque cambió después.
+- Un descanso del CRM (rest_day) queda aquí como día libre con su tipo, igual que en /horarios.html:
+  nota "Vacaciones" → vacación, "Incapacidad" → incapacidad, "Compensatorio" → compensatorio y
+  cualquier otro → libre. Si el CRM lo quita, se quita aquí.
 - Excepciones: un día que RRHH cambió y aún no llegó al CRM (está en la cola crm_outbox) no se
-  toca; y una vacación o un compensatorio de RRHH no se pisa con un turno: se reporta como
-  conflicto y se le vuelve a enviar al CRM.
+  toca; y una vacación, compensatorio o incapacidad que fijó RRHH no se pisa: se reporta como
+  conflicto (si el CRM puso turno) y se le vuelve a enviar al CRM.
 - El CRM manda los agentes ordenados por equipo (supervisor primero): esa posición se guarda en
   crm_order para listarlos igual aquí.
 - Cada agente se aplica en su propio savepoint: un error en uno no bloquea a los demás.
 """
 
+import unicodedata
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete, select
@@ -29,10 +36,27 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models import ApiClient, Department, Employee, IntegrationSync, ShiftAssignment, ShiftDayOff
+from app.models.schedule import PROTECTED_KINDS
 from app.schemas.integration import AgentResult, CrmAgent, CrmSchedulePayload, SyncResult
 from app.services import audit, crm_push
 from app.services.attendance_import import relink_badge
 from app.services.employee_roster import fix_case, name_key
+
+
+def rest_kind(notes: str | None) -> str:
+    """Tipo de día libre según la nota con la que el CRM marca el descanso."""
+    n = (notes or "").strip().lower()
+    if n in ("vacaciones", "vacación", "vacacion"):
+        return "vacacion"
+    if n in ("incapacidad", "compensatorio"):
+        return n
+    return "libre"
+
+
+def is_supervisor_role(role: str) -> bool:
+    """Misma regla que el CRM: un rol con 'supervisor' que no sea de administración ni backoffice."""
+    r = unicodedata.normalize("NFD", role).encode("ascii", "ignore").decode().lower()
+    return "supervisor" in r and not any(x in r for x in ("admin", "backoffice", "back office"))
 
 
 class AgentError(Exception):
@@ -56,6 +80,29 @@ def _department(db: Session, cache: dict[str, Department], name: str) -> Departm
     return cache[key]
 
 
+def _same_word(a: str, b: str) -> bool:
+    """Misma palabra salvo un error de escritura (una letra de más, de menos o cambiada):
+    "robert" ~ "roberto", "claros" ~ "claro", "abigal" ~ "abigail". Solo palabras de 4+ letras."""
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 4 or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    short, long_ = sorted((a, b), key=len)
+    return any(long_[:i] + long_[i + 1 :] == short for i in range(len(long_)))
+
+
+def _name_matches(wanted: set[str], employees) -> list[Employee]:
+    """Empleados cuyo nombre contiene todas las palabras del nombre del CRM. Si ninguno coincide
+    exacto, se busca de nuevo tolerando un error de escritura por palabra."""
+    keys = [(e, name_key(e.full_name)) for e in employees]
+    exact = [e for e, key in keys if wanted <= key]
+    if exact:
+        return exact
+    return [e for e, key in keys if all(any(_same_word(w, k) for k in key) for w in wanted)]
+
+
 def _resolve_employee(db: Session, agent: CrmAgent) -> Employee:
     employee = db.scalar(select(Employee).where(Employee.crm_agent_id == agent.crm_agent_id))
     if employee is not None:
@@ -72,24 +119,30 @@ def _resolve_employee(db: Session, agent: CrmAgent) -> Employee:
             employee.crm_agent_id = agent.crm_agent_id
             return employee
 
-    wanted = name_key(f"{agent.first_name or ''} {agent.last_name or ''}")
+    nombre = " ".join(filter(None, [agent.first_name, agent.last_name])) or "sin nombre"
+    wanted = name_key(nombre)
     if len(wanted) >= 2:
-        # Todas las palabras del nombre del CRM deben estar en el nombre completo de la nómina.
-        matches = [
-            e
-            for e in db.scalars(select(Employee).where(Employee.crm_agent_id.is_(None)))
-            if wanted <= name_key(e.full_name)
-        ]
+        # Todas las palabras del nombre del CRM deben estar en el nombre completo de la nómina;
+        # si ninguno coincide exacto, se toleran diferencias de escritura (_same_word).
+        free = db.scalars(select(Employee).where(Employee.crm_agent_id.is_(None))).all()
+        matches = _name_matches(wanted, free)
         if len(matches) == 1:
             matches[0].crm_agent_id = agent.crm_agent_id
             return matches[0]
         if len(matches) > 1:
             raise AgentError(
-                f"El nombre coincide con varios empleados ({', '.join(f'{e.code} {e.full_name}' for e in matches)}): "
+                f"El nombre {nombre} coincide con varios empleados ({', '.join(f'{e.code} {e.full_name}' for e in matches)}): "
                 "ponga el ID de CRM en la ficha del empleado correcto"
             )
+        linked = _name_matches(wanted, db.scalars(select(Employee).where(Employee.crm_agent_id.is_not(None))).all())
+        if linked:
+            raise AgentError(
+                f"El agente {nombre} coincide con "
+                f"{', '.join(f'{e.code} {e.full_name} (ID de CRM {e.crm_agent_id})' for e in linked)}, "
+                f"que ya está enlazado a otro agente del CRM: si es la misma persona, cambie el ID de CRM "
+                f"de la ficha a {agent.crm_agent_id}"
+            )
 
-    nombre = " ".join(filter(None, [agent.first_name, agent.last_name])) or "sin nombre"
     raise AgentError(
         f"El agente {nombre} no está en Empleados: regístrelo en la planilla (con su ID de reloj o "
         "su nombre completo) y vuelva a enviar el horario"
@@ -122,6 +175,8 @@ def _apply_agent(
     if agent.campaign:
         employee.department_id = _department(db, departments, agent.campaign).id
     employee.crm_order = position
+    if agent.role is not None:
+        employee.crm_supervisor = is_supervisor_role(agent.role)
 
     existing = {
         a.work_date: a
@@ -145,7 +200,11 @@ def _apply_agent(
     }
     pending = crm_push.pending(db, employee.id, payload.date_from, payload.date_to)
     wanted = {s.date: s for s in agent.shifts if not s.rest_day}
+    rest = {s.date: s for s in agent.shifts if s.rest_day}
     conflicts = []
+
+    def protected(off: ShiftDayOff | None) -> bool:
+        return off is not None and off.source == "rrhh" and off.kind in PROTECTED_KINDS
 
     for day, shift in sorted(wanted.items()):
         start_at = datetime.combine(day, shift.start, tz)
@@ -165,11 +224,11 @@ def _apply_agent(
         off = days_off.get(day)
         if day in pending:
             continue
-        if off is not None and off.kind in ("vacacion", "compensatorio"):
+        if protected(off):
             conflicts.append(day)
             crm_push.queue(db, [(employee.id, day)])
             continue
-        if off is not None:  # día libre de RRHH: el CRM ya lo conocía y ahora pone turno
+        if off is not None:  # día libre (del CRM o de RRHH ya entregado): ahora el CRM pone turno
             db.delete(off)
         if current is None:
             db.add(ShiftAssignment(employee_id=employee.id, work_date=day, **values))
@@ -184,6 +243,26 @@ def _apply_agent(
                 setattr(current, k, v)
             counters.updated += 1
 
+    # Descansos del CRM: día libre, vacación o incapacidad, igual que en el CRM.
+    for day, shift in rest.items():
+        if day in pending:
+            continue
+        kind = rest_kind(shift.notes)
+        notes = shift.notes if kind == "libre" else None
+        off = days_off.get(day)
+        if protected(off):
+            if off.kind != kind:
+                crm_push.queue(db, [(employee.id, day)])
+        elif off is None:
+            db.add(ShiftDayOff(employee_id=employee.id, work_date=day, kind=kind, notes=notes, source="crm"))
+        elif (off.kind, off.notes, off.source) != (kind, notes, "crm"):
+            off.kind, off.notes, off.source = kind, notes, "crm"
+
+    # Días libres que vinieron del CRM y el CRM ya no manda: se quitan.
+    for day, off in days_off.items():
+        if off.source == "crm" and day not in rest and day not in wanted and day not in pending:
+            db.delete(off)
+
     # Lo que el CRM ya no manda (o marcó como libre) se quita, salvo lo que aún va hacia el CRM.
     for day, current in existing.items():
         if day not in wanted and day not in pending:
@@ -197,7 +276,7 @@ def _apply_agent(
         employee_id=employee.id,
         employee_created=False,
         message=(
-            "Estas fechas son vacación o compensatorio en Cuadratura: no se puso turno y se le reenviaron al CRM"
+            "Estas fechas son vacación, compensatorio o incapacidad fijados por RRHH: no se puso turno y se le reenviaron al CRM"
             if conflicts
             else None
         ),

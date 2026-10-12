@@ -25,6 +25,7 @@ export const IconChevronDown = base("m6 9 6 6 6-6");
 export const IconHouse = base("M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5M10 21v-6h4v6");
 export const IconSim = base("M7 2h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2M9 12h6v6H9z");
 export const IconUserTie = base("M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1M12 14l-1.5 4L12 21l1.5-3z");
+export const IconTrash = base("M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6");
 export const IconLink = base("M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7");
 
 /** Tres puntos (menú de acciones de una fila): círculos rellenos, por eso no usa `base`. */

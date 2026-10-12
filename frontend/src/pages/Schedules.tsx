@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-import { IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconSim } from "../components/Icons";
+import { IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconSim, IconTrash } from "../components/Icons";
+import { ConfirmDelete } from "../components/RowMenu";
 import { Modal } from "../components/Modal";
 import { useCollapsedTeams } from "../components/TeamGroups";
 import {
@@ -20,6 +21,7 @@ import {
   type Sync,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { DAY_OFF_COLOR, dayOffColor, isNoShow, NO_SHOW, OTHER_SHIFT, SHIFT_KINDS, shiftColor, shiftKind } from "../lib/shiftColors";
 import { addDays, fmtDateTime, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
@@ -49,7 +51,7 @@ function readableOn(hex: string) {
   return lum > 0.6 ? "var(--text)" : "var(--on-accent)";
 }
 
-/** Horarios de una sección (Administrativo, Operativo, Supervisores o Agentes de ventas), con el
+/** Horarios de una sección (Administrativo, Operativo o Agentes de ventas), con el
  *  mismo desglose que Empleados y Marcaciones. */
 export function Schedules({ area }: { area: Area }) {
   const section = AREAS.find((a) => a.area === area)!.label;
@@ -60,6 +62,7 @@ export function Schedules({ area }: { area: Area }) {
   const [query, setQuery] = useState("");
   const [team, setTeam] = useState("all");
   const [pop, setPop] = useState<Pop | null>(null);
+  const [deleting, setDeleting] = useState<Employee | null>(null);
   const [assigning, setAssigning] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -101,7 +104,8 @@ export function Schedules({ area }: { area: Area }) {
   const templateOf = (a: ShiftAssignment) =>
     (a.template_id ? templateById.get(a.template_id) : undefined) ??
     templates.data?.find((t) => t.is_active && hhmm(t.start_time) === fmtTime(a.start_at) && hhmm(t.end_time) === fmtTime(a.end_at));
-  const colorOf = (a: ShiftAssignment) => templateOf(a)?.color ?? "#0891b2";
+  // Color por horas, igual que en el CRM (8–5, 10–7, 1–9, 9–6, shortdays y otro horario).
+  const colorOf = (a: ShiftAssignment) => shiftColor(fmtTime(a.start_at), fmtTime(a.end_at));
 
   /** Primera marca válida del día por empleado (la API las devuelve de la más reciente a la más antigua). */
   const firstPunch = useMemo(() => {
@@ -296,6 +300,26 @@ export function Schedules({ area }: { area: Area }) {
       </div>
 
       <div className="sch-legend">
+        {SHIFT_KINDS.filter((k) => !k.short).map((k) => (
+          <span key={k.label}>
+            <span className="swatch" style={{ background: k.color, borderRadius: 4 }} /> {k.label}
+          </span>
+        ))}
+        <span>
+          <span className="swatch" style={{ background: OTHER_SHIFT.color, borderRadius: 4 }} /> {OTHER_SHIFT.label}
+        </span>
+        {(
+          [
+            ["Libre", DAY_OFF_COLOR.libre],
+            ["Vacaciones", DAY_OFF_COLOR.vacacion],
+            ["Incapacidad", DAY_OFF_COLOR.incapacidad],
+            [NO_SHOW.label, NO_SHOW.color],
+          ] as const
+        ).map(([label, color]) => (
+          <span key={label}>
+            <span className="swatch" style={{ background: color, borderRadius: 4 }} /> {label}
+          </span>
+        ))}
         <span>
           <span className="sch-hatch" /> Descanso (ubicación referencial)
         </span>
@@ -305,7 +329,7 @@ export function Schedules({ area }: { area: Area }) {
       {(assignments.error || punches.error) && <div className="alert">{assignments.error || punches.error}</div>}
 
       <div className="sch-scroll">
-        <div className="sch-board">
+        <div className={`sch-board${canEdit ? " can-delete" : ""}`}>
           <div className="sch-grid sch-hist-row">
             <div className="sch-hist-label">
               <b>Personas en turno por hora</b>
@@ -324,6 +348,7 @@ export function Schedules({ area }: { area: Area }) {
               ))}
             </div>
             <div />
+            {canEdit && <div />}
           </div>
 
           <div className="sch-grid sch-head">
@@ -337,6 +362,7 @@ export function Schedules({ area }: { area: Area }) {
               <span>Semana</span>
               <span>Horas</span>
             </div>
+            {canEdit && <span />}
           </div>
 
           {groups.map((g) => {
@@ -375,9 +401,11 @@ export function Schedules({ area }: { area: Area }) {
                           <div className="sch-agent">
                             <Link to={`/empleados/${e.id}`} className="sch-name">
                               {e.full_name}
-                              {g.supervisor?.id === e.id && <i> · Supervisor</i>}
                             </Link>
-                            <div className={m.warn ? "sch-warn" : "caption"}>{m.text}</div>
+                            <div className={m.warn ? "sch-warn" : "caption"}>
+                              {e.is_supervisor && <span className="badge accent sup-tag">Supervisor</span>}
+                              {m.text}
+                            </div>
                           </div>
                           <div
                             className={`sch-track${canEdit ? " editable" : ""}`}
@@ -390,7 +418,10 @@ export function Schedules({ area }: { area: Area }) {
                               <ShiftBar a={a} day={day} h0={h0} span={span} color={colorOf(a)} template={templateOf(a)} />
                             ) : offByKey.has(`${e.id}|${day}`) ? (
                               <span className="sch-empty" title={offByKey.get(`${e.id}|${day}`)?.notes ?? undefined}>
-                                {DAY_OFF_LABEL[offByKey.get(`${e.id}|${day}`)!.kind]} (RRHH){canEdit ? " — clic para cambiar" : ""}
+                                <span className="swatch" style={{ background: dayOffColor(offByKey.get(`${e.id}|${day}`)!), borderRadius: 4, marginRight: 8 }} />
+                                {isNoShow(offByKey.get(`${e.id}|${day}`)!) ? NO_SHOW.label : DAY_OFF_LABEL[offByKey.get(`${e.id}|${day}`)!.kind]}
+                                {offByKey.get(`${e.id}|${day}`)!.source === "crm" ? " (CRM)" : " (RRHH)"}
+                                {canEdit ? " — clic para cambiar" : ""}
                               </span>
                             ) : (
                               <span className="sch-empty">{canEdit ? "Sin turno — clic para asignar" : "Sin turno"}</span>
@@ -400,18 +431,25 @@ export function Schedules({ area }: { area: Area }) {
                             <div className="sch-squares">
                               {days.map((d, i) => {
                                 const wa = byKey.get(`${e.id}|${d}`);
+                                const off = offByKey.get(`${e.id}|${d}`);
+                                const offLabel = off && (isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]);
                                 return (
                                   <span
                                     key={d}
-                                    title={`${DOW[i]}: ${wa ? `${fmtTime(wa.start_at)}–${fmtTime(wa.end_at)}` : offByKey.has(`${e.id}|${d}`) ? "Día libre (RRHH)" : "Sin turno"}`}
-                                    className={`${wa ? "" : "none"}${i === dayIndex ? " sel" : ""}`}
-                                    style={wa ? { background: colorOf(wa) } : undefined}
+                                    title={`${DOW[i]}: ${wa ? `${fmtTime(wa.start_at)}–${fmtTime(wa.end_at)}` : off ? `${offLabel} (${off.source === "crm" ? "CRM" : "RRHH"})` : "Sin turno"}`}
+                                    className={`${wa || off ? "" : "none"}${i === dayIndex ? " sel" : ""}`}
+                                    style={wa ? { background: colorOf(wa) } : off ? { background: dayOffColor(off) } : undefined}
                                   />
                                 );
                               })}
                             </div>
                             <b className={total > WEEK_LIMIT_HOURS ? "sch-warn" : total ? "" : "muted"}>{fmtHours(total)}</b>
                           </div>
+                          {canEdit && (
+                            <button className="icon-btn sch-del" onClick={() => setDeleting(e)} aria-label={`Eliminar a ${e.full_name}`} title="Eliminar empleado">
+                              <IconTrash width={16} height={16} />
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -428,7 +466,7 @@ export function Schedules({ area }: { area: Area }) {
       {pop && (
         <>
           <div className="sch-pop-backdrop" onClick={() => setPop(null)} />
-          <div className="sch-pop" style={{ top: pop.top, left: pop.left }} role="dialog" aria-label="Asignar turno">
+          <div className="sch-pop" style={{ top: pop.top, left: pop.left, maxHeight: `calc(100vh - ${pop.top + 8}px)` }} role="dialog" aria-label="Asignar turno">
             <div className="caption sch-pop-title">
               {pop.employee.full_name} · {DOW[pop.dayIndex]} {pop.day.slice(8)}
             </div>
@@ -436,7 +474,7 @@ export function Schedules({ area }: { area: Area }) {
             {activeTemplates.map((t) => (
               <button key={t.id} className={`sch-pop-item${popTemplate?.id === t.id ? " on" : ""}`} disabled={busy} onClick={() => applyTemplate(t, [pop.dayIndex])}>
                 <span className="row" style={{ gap: 8 }}>
-                  <span className="swatch" style={{ background: t.color, borderRadius: 4 }} />
+                  <span className="swatch" style={{ background: shiftColor(hhmm(t.start_time), hhmm(t.end_time)), borderRadius: 4 }} />
                   {t.name}
                 </span>
                 <span className="caption">
@@ -460,7 +498,8 @@ export function Schedules({ area }: { area: Area }) {
             )}
             {pop.dayOff && (
               <div className="caption sch-pop-note">
-                {DAY_OFF_LABEL[pop.dayOff.kind]} fijado por RRHH{pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. También está así en el CRM. Asignar un turno lo quita.
+                {DAY_OFF_LABEL[pop.dayOff.kind]} {pop.dayOff.source === "crm" ? "marcado en el CRM" : "fijado por RRHH"}
+                {pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. Está igual en los dos horarios; asignar un turno lo quita en ambos.
               </div>
             )}
             <div className="sch-pop-foot">
@@ -501,6 +540,24 @@ export function Schedules({ area }: { area: Area }) {
             assignments.reload();
           }}
         />
+      )}
+      {deleting && (
+        <ConfirmDelete
+          title="Eliminar empleado"
+          path={`/employees/${deleting.id}`}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            employees.reload();
+            assignments.reload();
+          }}
+        >
+          <p>
+            Se eliminará la ficha de <b>{deleting.full_name}</b> ({deleting.code}) en todo el sistema: Empleados, Horarios, Marcaciones,
+            vacaciones y constancias. Esto no se puede deshacer.
+          </p>
+          <p className="caption">Sus marcas del reloj se conservan, pero quedan sin nombre. Si la persona solo dejó de trabajar, mejor edítela y márquela como inactiva.</p>
+        </ConfirmDelete>
       )}
       {templatesOpen && (
         <TemplatesModal templates={templates.data ?? []} canEdit={canEdit} onClose={() => setTemplatesOpen(false)} onSaved={templates.reload} />
@@ -573,7 +630,7 @@ function ShiftBar({ a, day, h0, span, color, template }: { a: ShiftAssignment; d
       title={a.notes ?? undefined}
     >
       <span>
-        {fmtTime(a.start_at)}–{fmtTime(a.end_at)} · {template?.name ?? "Personalizado"}
+        {fmtTime(a.start_at)}–{fmtTime(a.end_at)} · {template?.name ?? (shiftKind(fmtTime(a.start_at), fmtTime(a.end_at)) ? (shiftKind(fmtTime(a.start_at), fmtTime(a.end_at))!.short ? "Shortday" : "Jornada completa") : "Personalizado")}
         {a.source === "crm" && " · CRM"}
       </span>
       {brk > 0 && <div className="sch-bar-break" style={{ left: `${brkLeft}%`, width: `${(brk / len) * 100}%` }} title={`Descanso de ${a.break_minutes} min`} />}
@@ -600,7 +657,7 @@ function TemplatesModal({ templates, canEdit, onClose, onSaved }: { templates: S
         {templates.map((t) => (
           <button key={t.id} className="sch-pop-item" disabled={!canEdit} onClick={() => setEditing(t)}>
             <span className="row" style={{ gap: 8 }}>
-              <span className="swatch" style={{ background: t.color, borderRadius: 4 }} />
+              <span className="swatch" style={{ background: shiftColor(hhmm(t.start_time), hhmm(t.end_time)), borderRadius: 4 }} />
               <b>{t.name}</b>
               {!t.is_active && <span className="caption">(inactivo)</span>}
             </span>
@@ -643,7 +700,7 @@ export function AssignModal({
   defaultFrom: string;
   defaultTo: string;
   initialSelected?: number[];
-  initialMode?: "turno" | "vacacion" | "compensatorio";
+  initialMode?: "turno" | "vacacion" | "compensatorio" | "incapacidad";
   initialWeekdays?: number[];
   initialNotes?: string;
   onClose: () => void;
@@ -724,6 +781,7 @@ export function AssignModal({
               ["turno", "Turno"],
               ["vacacion", "Vacación"],
               ["compensatorio", "Día compensatorio"],
+              ["incapacidad", "Incapacidad"],
             ] as const
           ).map(([value, label]) => (
             <button key={value} type="button" role="radio" aria-checked={mode === value} className={`btn sm${mode === value ? "" : " ghost"}`} onClick={() => setMode(value)}>
@@ -733,7 +791,7 @@ export function AssignModal({
         </div>
         {mode !== "turno" && (
           <div className="caption">
-            Los días elegidos quedan como {mode === "vacacion" ? "vacación" : "día compensatorio"}: se quita el turno que hubiera y quedan como descanso también en el horario del CRM.
+            Los días elegidos quedan como {mode === "vacacion" ? "vacación" : mode === "incapacidad" ? "incapacidad" : "día compensatorio"}: se quita el turno que hubiera y quedan como descanso también en el horario del CRM.
           </div>
         )}
         {error && <div className="alert">{error}</div>}
@@ -836,8 +894,6 @@ export function AssignModal({
   );
 }
 
-const COLORS = ["#06b6d4", "#22d3ee", "#a855f7", "#7c3aed", "#e879f9", "#3b82f6", "#0e7490", "#d946ef"];
-
 function TemplateModal({ template, onClose, onSaved }: { template: ShiftTemplate | null; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({
     name: template?.name ?? "",
@@ -845,7 +901,8 @@ function TemplateModal({ template, onClose, onSaved }: { template: ShiftTemplate
     end_time: template ? hhmm(template.end_time) : "17:00",
     break_minutes: template?.break_minutes ?? 60,
     tolerance_minutes: template?.tolerance_minutes ?? 5,
-    color: template?.color ?? COLORS[0],
+    // El color en pantalla sale de las horas (lib/shiftColors); este campo solo se conserva.
+    color: template?.color ?? OTHER_SHIFT.color,
     is_active: template?.is_active ?? true,
   });
   const [error, setError] = useState<string | null>(null);
@@ -890,20 +947,6 @@ function TemplateModal({ template, onClose, onSaved }: { template: ShiftTemplate
             <span>Tolerancia de llegada (min)</span>
             <input className="input" type="number" min={0} max={120} value={form.tolerance_minutes} onChange={(e) => setForm({ ...form, tolerance_minutes: Number(e.target.value) })} />
           </label>
-          <div className="field full">
-            <span>Color</span>
-            <div className="row" style={{ gap: 8 }}>
-              {COLORS.map((c) => (
-                <button
-                  type="button"
-                  key={c}
-                  aria-label={c}
-                  onClick={() => setForm({ ...form, color: c })}
-                  style={{ width: 32, height: 32, borderRadius: 999, background: c, border: form.color === c ? "3px solid var(--text)" : "3px solid transparent", cursor: "pointer" }}
-                />
-              ))}
-            </div>
-          </div>
           <label className="check full">
             <input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} /> Activo
           </label>

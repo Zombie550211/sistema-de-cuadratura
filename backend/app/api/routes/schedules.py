@@ -191,7 +191,7 @@ def _day_off(db: DB, employee_id: int, day: date, user, notes: str | None = None
         off = ShiftDayOff(employee_id=employee_id, work_date=day, kind=kind, notes=notes, created_by_id=user.id)
         db.add(off)
     else:
-        off.kind = kind
+        off.kind, off.source = kind, "rrhh"
         if notes is not None:
             off.notes = notes
     return off
@@ -253,7 +253,7 @@ def list_days_off(
     _: Staff,
     date_from: date,
     date_to: date,
-    kind: Annotated[str | None, Query(pattern="^(libre|vacacion|compensatorio)$")] = None,
+    kind: Annotated[str | None, Query(pattern="^(libre|vacacion|compensatorio|incapacidad)$")] = None,
 ):
     """Días sin turno fijados por RRHH. Filtrando por tipo (vacación o compensatorio) se puede
     pedir hasta un año completo, para las secciones de Vacaciones y Compensatorios."""

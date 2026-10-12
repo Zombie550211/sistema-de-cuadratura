@@ -170,7 +170,7 @@ def test_listado_sets_badge_on_existing_and_creates_new(login):
      ("Asistente de operarciones", None, "administrativo"), ("Asistente de RRHH", None, "administrativo"),
      ("Servicios varios", None, "administrativo"), ("Asistente administrativa", None, "administrativo"),
      ("IT", None, "operativo"), ("Publicidad", None, "operativo"),
-     ("Supervisora de ventas", None, "supervisor"), ("AGENTE DE VENTAS", None, "ventas"), ("BO", None, "ventas"),
+     ("Supervisora de ventas", None, "ventas"), ("AGENTE DE VENTAS", None, "ventas"), ("BO", None, "ventas"),
      ("Control de calidad", None, "ventas"), (None, "150", "ventas"), (None, None, "ventas")],
 )
 def test_area_for(position, crm_id, area):
@@ -184,8 +184,9 @@ def test_employees_filtered_by_area(login):
     roster = ROSTER + "4 CN\tIRANIA CECILIA SERRANO MEJIA\tSUPERVISORA DE VENTAS\t07/04/2021\n"
     client.post("/api/employees/import", json={"text": roster, "dry_run": False})
     areas = {e["code"]: e["area"] for e in client.get("/api/employees").json()["items"]}
-    assert areas == {"28 CN": "ventas", "60 CN": "ventas", "61 CN": "ventas", "4 CN": "supervisor"}
-    assert [e["code"] for e in client.get("/api/employees", params={"area": "supervisor"}).json()["items"]] == ["4 CN"]
+    assert areas == {"28 CN": "ventas", "60 CN": "ventas", "61 CN": "ventas", "4 CN": "ventas"}
+    assert [e["code"] for e in client.get("/api/employees").json()["items"] if e["is_supervisor"]] == ["4 CN"]
+    assert client.get("/api/employees", params={"area": "supervisor"}).status_code == 422
 
     # RRHH la cambia a mano; se respeta mientras el cargo no cambie.
     emp = client.get("/api/employees", params={"q": "Pleitez"}).json()["items"][0]

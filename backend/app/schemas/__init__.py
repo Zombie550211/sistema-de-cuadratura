@@ -8,7 +8,7 @@ from app.models import EmployeeStatus, PayFrequency, Role
 from app.services.zk_attlog import normalize_badge
 
 T = TypeVar("T")
-Area = Literal["administrativo", "operativo", "supervisor", "ventas"]
+Area = Literal["administrativo", "operativo", "ventas"]
 
 
 class ORM(BaseModel):
@@ -145,6 +145,7 @@ class EmployeeOut(ORM, EmployeeBase):
     area: Area
     full_name: str
     crm_order: int | None = None
+    is_supervisor: bool = False
     department: DepartmentOut | None
 
 
@@ -273,7 +274,7 @@ class ShiftUpdateIn(BaseModel):
         return self
 
 
-DayOffKind = Literal["libre", "vacacion", "compensatorio"]
+DayOffKind = Literal["libre", "vacacion", "compensatorio", "incapacidad"]
 
 
 class ShiftDayOffIn(BaseModel):
@@ -289,6 +290,7 @@ class ShiftDayOffOut(ORM):
     work_date: date
     kind: DayOffKind
     notes: str | None
+    source: str
 
 
 class LeaveBulkIn(BaseModel):
@@ -298,7 +300,7 @@ class LeaveBulkIn(BaseModel):
     date_from: date
     date_to: date
     weekdays: list[int] = Field(default=[0, 1, 2, 3, 4, 5], description="0=lunes … 6=domingo")
-    kind: Literal["vacacion", "compensatorio"]
+    kind: Literal["vacacion", "compensatorio", "incapacidad"]
     notes: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")

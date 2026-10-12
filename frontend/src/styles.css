@@ -470,8 +470,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sch-hatch { display: inline-block; width: 20px; height: 12px; border-radius: 4px; background: repeating-linear-gradient(135deg, var(--muted-2) 0 2px, transparent 2px 4px); }
 
 .sch-scroll { overflow-x: auto; }
-.sch-board { min-width: 960px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 20px 20px; box-shadow: var(--shadow-card); }
+.sch-board { min-width: 760px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 20px 20px; box-shadow: var(--shadow-card); }
 .sch-grid { display: grid; grid-template-columns: 240px minmax(0, 1fr) 152px; gap: 12px; align-items: center; }
+.sch-board.can-delete .sch-grid { grid-template-columns: 220px minmax(0, 1fr) 152px 28px; }
+.sch-del:hover { color: var(--danger); }
 .sch-hist-row { align-items: end; }
 .sch-hist-label { display: flex; flex-direction: column; gap: 4px; }
 .sch-hist { height: 96px; display: flex; align-items: flex-end; gap: 4px; }
@@ -505,6 +507,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sch-name { display: block; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sch-name:hover { color: var(--accent-bright); }
 .sch-name i { font-weight: 400; color: var(--muted); }
+.sup-tag { padding: 0 6px; margin-right: 6px; font-size: 11px; line-height: 16px; }
 .sch-track {
   position: relative; height: 40px; border-radius: var(--r-sm);
   background-image: linear-gradient(90deg, var(--line) 1px, transparent 1px);
@@ -528,9 +531,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sch-pop-backdrop { position: fixed; inset: 0; z-index: 30; }
 .sch-pop {
   position: fixed; z-index: 31; width: 304px; padding: 8px; display: flex; flex-direction: column; gap: 4px;
+  overflow-y: auto; overscroll-behavior: contain;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-modal);
   animation: zeDrop 0.2s ease-out both;
 }
+.sch-pop > * { flex-shrink: 0; }
 .sch-pop-title { padding: 4px 8px 8px; }
 .sch-pop-item {
   width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px;

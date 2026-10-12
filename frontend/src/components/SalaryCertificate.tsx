@@ -86,7 +86,7 @@ interface Fields {
 
 export function SalaryCertificate({ employee, onClose, onIssued }: { employee: Employee; onClose: () => void; onIssued: () => void }) {
   const [f, setF] = useState<Fields>(() => ({
-    template: employee.area === "ventas" || employee.area === "supervisor" ? "comisiones" : "bono",
+    template: employee.area === "ventas" ? "comisiones" : "bono",
     name: employee.full_name.toUpperCase(),
     dui: employee.dui ?? "",
     position: employee.position ?? "",

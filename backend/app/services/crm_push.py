@@ -28,7 +28,9 @@ from app.models import CrmOutbox, Employee, ShiftAssignment, ShiftDayOff
 
 log = logging.getLogger("asistencia.crm_push")
 
-DAY_OFF_NOTE = {"libre": "Libre", "vacacion": "Vacación", "compensatorio": "Compensatorio"}
+# Así los reconoce /horarios.html del CRM: descanso con nota "Vacaciones" o "Incapacidad" (exacta);
+# cualquier otro descanso es "Libre" (con su nota, si tiene).
+CRM_NOTE = {"vacacion": "Vacaciones", "incapacidad": "Incapacidad", "compensatorio": "Compensatorio"}
 BATCH = 500
 
 
@@ -72,8 +74,8 @@ def _change(db: Session, crm_id: str, employee_id: int, day: date) -> dict:
         }
     off = db.scalar(select(ShiftDayOff).where(ShiftDayOff.employee_id == employee_id, ShiftDayOff.work_date == day))
     if off is not None:
-        note = DAY_OFF_NOTE.get(off.kind, "Libre") + (f" · {off.notes}" if off.notes else "")
-        return {**base, "rest_day": True, "notes": note[:500]}
+        note = CRM_NOTE.get(off.kind, off.notes)
+        return {**base, "rest_day": True, "notes": note[:500] if note else None}
     return {**base, "clear": True}
 
 

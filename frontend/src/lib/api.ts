@@ -18,7 +18,7 @@ export interface Department {
 export interface TeamGroup<T> {
   key: string;
   team: Department | null;
-  /** Primer agente del team según el CRM: el CRM siempre manda al supervisor primero. */
+  /** Supervisor del team: el marcado como supervisor (rol del CRM o cargo). */
   supervisor: T | null;
   items: T[];
   /** true si el grupo abre una sección (Residencial / Líneas) distinta a la del anterior. */
@@ -26,17 +26,14 @@ export interface TeamGroup<T> {
 }
 
 /** Agrupa empleados consecutivos por team. La API ya los devuelve en el orden del CRM. */
-const isSupervisorPosition = (position: string | null) => !!position && /supervisor/i.test(position);
-
-export function groupByTeam<T extends { department: Department | null; crm_order: number | null; position: string | null }>(items: T[]) {
+export function groupByTeam<T extends { department: Department | null; is_supervisor: boolean }>(items: T[]) {
   const groups: TeamGroup<T>[] = [];
   for (const item of items) {
     const key = item.department ? String(item.department.id) : "none";
     const last = groups[groups.length - 1];
     if (last?.key === key) {
       last.items.push(item);
-      // El cargo de la nómina manda sobre la posición del envío del CRM.
-      if (last.team && isSupervisorPosition(item.position) && !isSupervisorPosition(last.supervisor?.position ?? null)) last.supervisor = item;
+      if (last.team && item.is_supervisor && !last.supervisor) last.supervisor = item;
       continue;
     }
     const section = item.department?.section ?? "none";
@@ -44,7 +41,7 @@ export function groupByTeam<T extends { department: Department | null; crm_order
     groups.push({
       key,
       team: item.department,
-      supervisor: item.department && (item.crm_order !== null || isSupervisorPosition(item.position)) ? item : null,
+      supervisor: item.department && item.is_supervisor ? item : null,
       items: [item],
       newSection: section !== lastSection,
     });
@@ -54,13 +51,12 @@ export function groupByTeam<T extends { department: Department | null; crm_order
 
 export const SECTION_LABEL = { residencial: "Residencial", lineas: "Líneas" } as const;
 
-export type Area = "administrativo" | "operativo" | "supervisor" | "ventas";
+export type Area = "administrativo" | "operativo" | "ventas";
 
-/** Las 4 secciones de Empleados, en el orden del menú, con su ruta /empleados/<slug>. */
+/** Las 3 secciones de Empleados, en el orden del menú, con su ruta /empleados/<slug>. */
 export const AREAS: { area: Area; slug: string; label: string }[] = [
   { area: "administrativo", slug: "administrativo", label: "Administrativo" },
   { area: "operativo", slug: "operativo", label: "Operativo" },
-  { area: "supervisor", slug: "supervisores", label: "Supervisores" },
   { area: "ventas", slug: "agentes", label: "Agentes de ventas" },
 ];
 
@@ -120,6 +116,8 @@ export interface Employee extends EmployeeInput {
   area: Area;
   full_name: string;
   crm_order: number | null;
+  /** Supervisor de su team (rol del CRM o cargo): va con su team en Agentes de ventas. */
+  is_supervisor: boolean;
   department: Department | null;
 }
 
@@ -230,13 +228,14 @@ export interface ShiftAssignment {
   source: "manual" | "crm";
 }
 
-/** Día libre fijado por RRHH (al reagendar o dar el día); el CRM no pone turno ese día. */
-export type DayOffKind = "libre" | "vacacion" | "compensatorio";
+/** Día sin turno: lo fija RRHH (al reagendar o dar el día) o viene del CRM como descanso. */
+export type DayOffKind = "libre" | "vacacion" | "compensatorio" | "incapacidad";
 
 export const DAY_OFF_LABEL: Record<DayOffKind, string> = {
   libre: "Día libre",
   vacacion: "Vacación",
   compensatorio: "Compensatorio",
+  incapacidad: "Incapacidad",
 };
 
 export interface ShiftDayOff {
@@ -245,6 +244,8 @@ export interface ShiftDayOff {
   work_date: string;
   kind: DayOffKind;
   notes: string | null;
+  /** rrhh = lo fijó RRHH aquí; crm = vino del horario del CRM. */
+  source: "rrhh" | "crm";
 }
 
 /** Un período de 15 días de vacación (un año desde el aniversario de ingreso) y cómo se entregó. */

@@ -36,7 +36,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const can = useCallback((...roles: Role[]) => !!user && roles.includes(user.role), [user]);
+  // El administrador ve y puede hacer todo, aunque la acción no lo nombre.
+  const can = useCallback((...roles: Role[]) => !!user && (user.role === "admin" || roles.includes(user.role)), [user]);
 
   return <AuthContext.Provider value={{ user, loading, login, logout, can }}>{children}</AuthContext.Provider>;
 }

@@ -29,7 +29,7 @@ def team_section(name: str) -> str:
     return "lineas" if "linea" in _ascii(name) else "residencial"
 
 
-AREAS = ("administrativo", "operativo", "supervisor", "ventas")
+AREAS = ("administrativo", "operativo", "ventas")
 
 _ADMINISTRATIVO = ("gerente", "operacion", "operarcion", "rrhh", "recursos humanos", "servicios varios",
                    "administrativ")
@@ -40,11 +40,9 @@ def area_for(position: str | None, crm_agent_id: str | None = None) -> str:
     """Área del empleado según su cargo en la planilla:
     - Administrativo: gerentes, asistente de operaciones, RRHH y servicios varios.
     - Operativo: IT y publicidad.
-    - Supervisores: supervisor/a.
-    - Agentes de ventas: el resto (agentes, BO, control de calidad) y quien llega del CRM sin cargo."""
+    - Agentes de ventas: el resto (agentes, supervisores, BO, control de calidad) y quien llega del
+      CRM sin cargo. Los supervisores van con su team y se etiquetan (Employee.is_supervisor)."""
     cargo = _ascii(position or "")
-    if "supervis" in cargo:
-        return "supervisor"
     if any(w in cargo for w in _ADMINISTRATIVO):
         return "administrativo"
     if any(w in cargo for w in _OPERATIVO) or re.search(r"\bit\b", cargo):
@@ -99,6 +97,8 @@ class Employee(TimestampMixin, Base):
     # Posición del agente en el último envío del CRM, que ya llega ordenado por equipo con el
     # supervisor primero. Sirve para listar dentro de cada equipo en el mismo orden.
     crm_order: Mapped[int | None] = mapped_column(Integer)
+    # El rol del agente en el CRM es de supervisor (lo manda el CRM en cada envío).
+    crm_supervisor: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     first_name: Mapped[str] = mapped_column(String(100))
     last_name: Mapped[str] = mapped_column(String(100))
     dui: Mapped[str | None] = mapped_column(String(10), unique=True)
@@ -109,7 +109,7 @@ class Employee(TimestampMixin, Base):
     email: Mapped[str | None] = mapped_column(String(160))
     phone: Mapped[str | None] = mapped_column(String(20))
     position: Mapped[str | None] = mapped_column(String(120))
-    # administrativo | operativo | supervisor | ventas (ver area_for); RRHH puede cambiarla a mano.
+    # administrativo | operativo | ventas (ver area_for); RRHH puede cambiarla a mano.
     area: Mapped[str] = mapped_column(String(16), default="administrativo", server_default="administrativo", index=True)
     department_id: Mapped[int | None] = mapped_column(
         ForeignKey("departments.id", ondelete="SET NULL"), index=True
@@ -156,6 +156,11 @@ class Employee(TimestampMixin, Base):
     def _upper_name(self, _key, name: str) -> str:
         # RRHH maneja los nombres en mayúsculas, vengan del CRM, de la nómina o de la pantalla.
         return " ".join((name or "").split()).upper()
+
+    @property
+    def is_supervisor(self) -> bool:
+        """Supervisor de su team: lo dice el rol del CRM o, si el CRM no lo marca, el cargo."""
+        return self.crm_supervisor or "supervis" in _ascii(self.position or "")
 
     @property
     def full_name(self) -> str:
