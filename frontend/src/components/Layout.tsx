@@ -4,7 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { AREAS, type Role } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ROLE_LABEL } from "../lib/format";
-import { IconCalendar, IconChevronDown, IconClock, IconHome, IconLink, IconLogout, IconRepeat, IconShield, IconSun, IconUpload, IconUsers } from "./Icons";
+import { IconCalendar, IconChevronDown, IconClock, IconFile, IconHome, IconLink, IconLogout, IconRepeat, IconShield, IconSun, IconUpload, IconUsers } from "./Icons";
 import { LiveClock } from "./LiveClock";
 
 const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }[] = [
@@ -15,6 +15,7 @@ const LINKS: { to: string; label: string; icon: typeof IconHome; roles: Role[] }
   { to: "/vacaciones", label: "Días de vacación", icon: IconSun, roles: ["admin", "rrhh"] },
   { to: "/compensatorios", label: "Días compensatorio", icon: IconRepeat, roles: ["admin", "rrhh"] },
   { to: "/empleados", label: "Empleados", icon: IconUsers, roles: ["admin", "rrhh"] },
+  { to: "/recibos-google", label: "Recibos Google Ads", icon: IconFile, roles: ["admin", "rrhh"] },
   { to: "/integraciones", label: "Integración CRM", icon: IconLink, roles: ["admin", "rrhh"] },
   { to: "/usuarios", label: "Usuarios", icon: IconShield, roles: ["admin"] },
 ];

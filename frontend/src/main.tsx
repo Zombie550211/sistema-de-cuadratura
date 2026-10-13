@@ -14,6 +14,7 @@ import { AREAS, type Role } from "./lib/api";
 import { AuthProvider, useAuth } from "./lib/auth";
 import { Dashboard } from "./pages/Dashboard";
 import { EmployeeProfile, EmployeeProfilePage } from "./pages/EmployeeProfile";
+import { GoogleAdsReceipts } from "./pages/GoogleAdsReceipts";
 import { Employees } from "./pages/Employees";
 import { Import } from "./pages/Import";
 import { Integrations } from "./pages/Integrations";
@@ -97,6 +98,7 @@ function App() {
           <Route key={`${base}-sup`} path={`${base}/supervisores`} element={<Navigate to={`/${base}/agentes`} replace />} />
         ))}
         <Route path="empleados/:id" element={<Guard roles={STAFF}><EmployeeProfilePage /></Guard>} />
+        <Route path="recibos-google" element={<Guard roles={STAFF}><GoogleAdsReceipts /></Guard>} />
         <Route path="integraciones" element={<Guard roles={["admin", "rrhh"]}><Integrations /></Guard>} />
         <Route path="usuarios" element={<Guard roles={["admin"]}><Users /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -337,6 +337,28 @@ export interface EmployeeSchedule {
   leave: { year: number; vacacion: number; compensatorio: number };
 }
 
+/** Recibo de Google Ads que envía el CRM (solo lectura aquí). Montos en centavos. */
+export interface GoogleAdsReceipt {
+  id: number;
+  crm_id: number;
+  payment_date: string;
+  account_key: string;
+  account_name: string;
+  amount_cents: number;
+  billing_id: string | null;
+  payment_method: string | null;
+  file_name: string;
+  uploaded_by: string;
+  received_at: string;
+}
+
+export interface GoogleAdsSummary {
+  month: string;
+  total_month_cents: number;
+  receipts: number;
+  last_payment: string | null;
+}
+
 export interface DashboardSummary {
   employees_active: number;
   employees_without_badge: number;

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from app.api.routes import attendance, auth, employees, integrations, schedules, users
+from app.api.routes import attendance, auth, employees, google_ads, integrations, schedules, users
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.security import hash_password
@@ -71,7 +71,7 @@ if settings.cors_origins:
         allow_headers=["*"],
     )
 
-for module in (auth, users, employees, schedules, attendance, integrations):
+for module in (auth, users, employees, schedules, attendance, integrations, google_ads):
     app.include_router(module.router, prefix="/api")
 
 

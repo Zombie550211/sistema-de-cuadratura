@@ -604,3 +604,24 @@ button, input, select, textarea { font: inherit; color: inherit; }
 @media (max-width: 900px) { .stats.six { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .chip-x { display: inline-grid; place-items: center; margin-left: 4px; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; opacity: 0.6; }
 .chip-x:hover { opacity: 1; }
+
+/* ---------- Recibos de Google Ads (pages/GoogleAdsReceipts.tsx) ---------- */
+.stats.gads-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.stats.gads-stats .value { font-size: 32px; }
+.gads-group td { background: var(--bg); }
+.gads-table td { white-space: nowrap; }
+.gads-toggle { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; font: inherit; color: var(--text); cursor: pointer; }
+.gads-toggle svg { color: var(--accent); transition: transform 0.15s; }
+.gads-toggle svg.gads-closed { transform: rotate(-90deg); }
+.gads-indent { padding-left: 36px !important; }
+.gads-file { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; }
+.gads-file svg { flex: none; color: var(--danger); }
+.gads-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gads-actions { display: inline-flex; gap: 6px; }
+/* Colores de cada cuenta, los mismos de sus columnas en la facturación del CRM. */
+.badge.gads-alexis { color: #007098; border-color: #7cc3dc; background: #eef7fb; }
+.badge.gads-alexis2 { color: #1f7fa3; border-color: #8ccbe2; background: #eff8fc; }
+.badge.gads-garay_lineas { color: #a16207; border-color: #f2c66d; background: #fffbeb; }
+.badge.gads-tito { color: #15803d; border-color: #86d2a3; background: #f0fdf4; }
+.badge.gads-tito_lineas { color: #003e55; border-color: #8aa9b8; background: #eef3f6; }
+@media (max-width: 900px) { .stats.gads-stats { grid-template-columns: 1fr; } }

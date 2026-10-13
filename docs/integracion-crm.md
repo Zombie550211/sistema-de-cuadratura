@@ -170,6 +170,43 @@ X-API-Key: <CRM_API_KEY de Cuadratura = CUADRATURA_ENTRADA_KEY del CRM>
 - Configuración en el `.env` de Cuadratura: `CRM_URL` y `CRM_API_KEY`. Sin ellas no se envía nada
   (y los cambios de RRHH quedan en la cola hasta que se configure).
 
+## 3. Recibos de Google Ads (CRM → Cuadratura, solo lectura)
+
+Los administradores registran en el CRM los pagos de Google Ads con su comprobante PDF
+(Facturación → Recibos Google Ads). El CRM envía cada recibo aquí al guardarlo y reintenta
+cada 5 min los que no llegaron (también los que ya existían). En Cuadratura se ven en
+**Recibos Google Ads** (administradores y RRHH) y no se pueden editar.
+
+```
+POST /api/integrations/crm/google-ads-receipts
+X-API-Key: cnx_…
+Content-Type: multipart/form-data
+  datos   = JSON (ver campos)
+  archivo = el PDF (máx. 10 MB, debe empezar por %PDF-)
+```
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `crm_id` | entero | id del recibo en el CRM; **clave de idempotencia** |
+| `fecha_pago` | AAAA-MM-DD | |
+| `cuenta` | texto | `alexis`, `alexis2`, `garay_lineas`, `tito`, `tito_lineas` |
+| `cuenta_nombre` | texto | nombre para mostrar (Alexis, Garay Líneas…) |
+| `monto_centavos` | entero > 0 | |
+| `billing_id` | texto o null | formato `0000-0000-0000` |
+| `metodo_pago` | texto o null | p. ej. `Mastercard •••• 1023` |
+| `archivo_nombre` | texto | nombre original del PDF |
+| `sha256` | hex (64) | huella del PDF; debe coincidir con el archivo enviado |
+| `subido_por` | texto | usuario del CRM |
+| `creado` | fecha-hora ISO o null | cuándo se registró en el CRM |
+
+Respuestas: **201** `{"estado": "creado"}` · **200** `{"estado": "ya_estaba"}` (ese `crm_id` ya
+llegó con el mismo PDF: reenviar no duplica) · **409** ese `crm_id` ya existe con otro PDF, o ese
+PDF ya está con otro recibo · **413** más de 10 MB · **415** no es PDF · **422** datos inválidos o
+huella que no coincide · **401** clave inválida.
+
+Los PDF se guardan en el almacenamiento de la app (`recibos_google/<uuid>.pdf`) y solo se
+entregan por `GET /api/google-ads-receipts/{id}/pdf` con sesión de administrador o RRHH.
+
 ## Calendario recomendado
 
 - **Sábado o domingo:** enviar la semana siguiente completa (lunes a domingo).
