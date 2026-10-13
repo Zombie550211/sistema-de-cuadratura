@@ -2,7 +2,7 @@ import { Fragment, useState, type FormEvent } from "react";
 
 import { IconChevronDown, IconFile } from "../components/Icons";
 import { api, type GoogleAdsReceipt, type GoogleAdsSummary } from "../lib/api";
-import { fmtLongDate, today } from "../lib/format";
+import { fmtDateTime, fmtLongDate, today } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 /** Cuentas de la facturación del CRM, en su orden (CRM: routers/recibos_google.py). */
@@ -25,12 +25,15 @@ interface Filters {
   q: string;
 }
 
-/** Recibos de pago de Google Ads. Se registran en el CRM y llegan aquí solos; esta vista es de solo lectura. */
+/** Recibos de pago de Google Ads. Se registran en el CRM y llegan aquí solos. Lo único que se cambia
+ *  aquí es la conciliación: RRHH marca el recibo cuando ya revisó el documento (vuelve al CRM). */
 export function GoogleAdsReceipts() {
   const hoy = today();
   const [draft, setDraft] = useState<Filters>({ desde: `${hoy.slice(0, 8)}01`, hasta: hoy, cuenta: "", q: "" });
   const [filters, setFilters] = useState(draft);
   const [closed, setClosed] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const summary = useAsync(() => api.get<GoogleAdsSummary>("/google-ads-receipts/summary"), []);
   const list = useAsync(
@@ -44,6 +47,20 @@ export function GoogleAdsReceipts() {
     groups.get(r.payment_date)!.push(r);
   }
   const totalFiltered = (list.data ?? []).reduce((s, r) => s + r.amount_cents, 0);
+  const reconciledCount = (list.data ?? []).filter((r) => r.reconciled).length;
+
+  async function reconcile(r: GoogleAdsReceipt, value: boolean) {
+    setSaving(r.id);
+    setError(null);
+    try {
+      await api.put(`/google-ads-receipts/${r.id}/reconciliation`, { reconciled: value });
+      list.reload();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(null);
+    }
+  }
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -65,7 +82,7 @@ export function GoogleAdsReceipts() {
       <div className="page-head">
         <div>
           <h1>Recibos de Google Ads</h1>
-          <p>Pagos de publicidad con su comprobante PDF. Se registran en el CRM (Facturación → Recibos Google Ads) y llegan aquí solos.</p>
+          <p>Pagos de publicidad con su comprobante PDF. Se registran en el CRM (Facturación → Recibos Google Ads) y llegan aquí solos. Marque «Conciliación» cuando haya revisado el documento.</p>
         </div>
       </div>
 
@@ -105,13 +122,14 @@ export function GoogleAdsReceipts() {
         </button>
       </form>
 
-      {list.error && <div className="alert">{list.error}</div>}
+      {(list.error || error) && <div className="alert">{list.error || error}</div>}
       <div className="card">
         <div className="card-head">
           <h3>Historial de recibos</h3>
           {!!list.data?.length && (
             <span className="badge accent">
-              {list.data.length} {list.data.length === 1 ? "recibo" : "recibos"} · {money(totalFiltered)}
+              {list.data.length} {list.data.length === 1 ? "recibo" : "recibos"} · {money(totalFiltered)} · {reconciledCount}{" "}
+              {reconciledCount === 1 ? "conciliado" : "conciliados"}
             </span>
           )}
         </div>
@@ -125,6 +143,7 @@ export function GoogleAdsReceipts() {
                 <th className="num">Monto</th>
                 <th>Archivo PDF</th>
                 <th className="num">Acciones</th>
+                <th className="gads-conc-col">Conciliación</th>
               </tr>
             </thead>
             <tbody>
@@ -145,7 +164,7 @@ export function GoogleAdsReceipts() {
                       <td className="num mono">
                         <b>{money(rows.reduce((t, r) => t + r.amount_cents, 0))}</b>
                       </td>
-                      <td colSpan={2} />
+                      <td colSpan={3} />
                     </tr>
                     {open &&
                       rows.map((r) => (
@@ -171,6 +190,25 @@ export function GoogleAdsReceipts() {
                                 Descargar
                               </a>
                             </div>
+                          </td>
+                          <td className="gads-conc-col">
+                            <label
+                              className={`gads-conc${r.reconciled ? " on" : ""}`}
+                              title={
+                                r.reconciled
+                                  ? `Conciliado${r.reconciled_by ? ` por ${r.reconciled_by}` : ""}${r.reconciled_at ? ` · ${fmtDateTime(r.reconciled_at)}` : ""}`
+                                  : "Marque cuando haya revisado el documento"
+                              }
+                            >
+                              <input
+                                type="checkbox"
+                                checked={r.reconciled}
+                                disabled={saving === r.id}
+                                onChange={(e) => reconcile(r, e.target.checked)}
+                                aria-label={`Conciliación de ${r.file_name}`}
+                              />
+                              {r.reconciled ? "Conciliado" : "Pendiente"}
+                            </label>
                           </td>
                         </tr>
                       ))}

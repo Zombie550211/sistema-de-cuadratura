@@ -620,6 +620,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .gads-file svg { flex: none; color: var(--danger); }
 .gads-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gads-actions { display: inline-flex; gap: 6px; }
+/* Conciliación (mismo verde que en el CRM) */
+.gads-conc-col { text-align: center; }
+.gads-conc { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.gads-conc input { width: 18px; height: 18px; margin: 0; accent-color: #15803d; cursor: pointer; }
+.gads-conc input:disabled { cursor: wait; }
+.gads-conc.on { color: #15803d; font-weight: 700; }
 /* Colores de cada cuenta, los mismos de sus columnas en la facturación del CRM. */
 .badge.gads-alexis { color: #007098; border-color: #7cc3dc; background: #eef7fb; }
 .badge.gads-alexis2 { color: #1f7fa3; border-color: #8ccbe2; background: #eff8fc; }

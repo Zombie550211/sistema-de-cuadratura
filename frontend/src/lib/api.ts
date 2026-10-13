@@ -337,7 +337,7 @@ export interface EmployeeSchedule {
   leave: { year: number; vacacion: number; compensatorio: number };
 }
 
-/** Recibo de Google Ads que envía el CRM (solo lectura aquí). Montos en centavos. */
+/** Recibo de Google Ads que envía el CRM (solo lectura aquí, salvo la conciliación). Montos en centavos. */
 export interface GoogleAdsReceipt {
   id: number;
   crm_id: number;
@@ -350,6 +350,10 @@ export interface GoogleAdsReceipt {
   file_name: string;
   uploaded_by: string;
   received_at: string;
+  /** RRHH ya revisó el documento (se marca aquí y se muestra en el CRM). */
+  reconciled: boolean;
+  reconciled_by: string | null;
+  reconciled_at: string | null;
 }
 
 export interface GoogleAdsSummary {

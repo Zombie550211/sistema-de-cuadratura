@@ -14,7 +14,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import DB, HR, ApiClientDep
 from app.core.config import get_settings
 from app.models.google_ads import GoogleAdsReceipt
+from app.services import audit, recibos_crm
 from app.services.storage import get_storage
 
 router = APIRouter(tags=["recibos google ads"])
@@ -74,8 +75,15 @@ class ReceiptOut(BaseModel):
     file_name: str
     uploaded_by: str
     received_at: datetime
+    reconciled: bool
+    reconciled_by: str | None
+    reconciled_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+class ReconciliationIn(BaseModel):
+    reconciled: bool
 
 
 class ReceiptSummary(BaseModel):
@@ -187,6 +195,30 @@ def receipts_summary(db: DB, _: HR):
     count = db.scalar(select(func.count()).select_from(GoogleAdsReceipt))
     last = db.scalar(select(func.max(GoogleAdsReceipt.payment_date)))
     return ReceiptSummary(month=first.strftime("%Y-%m"), total_month_cents=total or 0, receipts=count or 0, last_payment=last)
+
+
+@router.put("/google-ads-receipts/{receipt_id}/reconciliation", response_model=ReceiptOut)
+def reconcile_receipt(receipt_id: int, data: ReconciliationIn, db: DB, user: HR, background: BackgroundTasks):
+    """Conciliación: RRHH marca el recibo cuando ya revisó el documento (o quita la marca).
+    Se guarda quién y cuándo, y se avisa al CRM, donde solo se muestra."""
+    receipt = db.get(GoogleAdsReceipt, receipt_id)
+    if receipt is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Recibo no encontrado")
+    receipt.reconciled = data.reconciled
+    receipt.reconciled_by = (user.full_name or user.username) if data.reconciled else None
+    receipt.reconciled_at = datetime.now(get_settings().tz) if data.reconciled else None
+    audit.record(db, user, "conciliar" if data.reconciled else "quitar_conciliacion", "google_ads_receipt", receipt.id,
+                 {"crm_id": receipt.crm_id, "archivo": receipt.file_name})
+    db.commit()
+    db.refresh(receipt)
+    background.add_task(recibos_crm.avisar, [recibos_crm.estado(receipt)])
+    return receipt
+
+
+@router.get("/integrations/crm/google-ads-receipts/reconciliation")
+def crm_reconciliation(db: DB, client: ApiClientDep):
+    """Estado de conciliación de todos los recibos, para que el CRM se ponga al día (cada 5 min)."""
+    return {"recibos": [recibos_crm.estado(r) for r in db.scalars(select(GoogleAdsReceipt)).all()]}
 
 
 @router.get("/google-ads-receipts/{receipt_id}/pdf")
