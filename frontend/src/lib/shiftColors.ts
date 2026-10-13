@@ -15,13 +15,24 @@ export const OTHER_SHIFT = { label: "Otro horario", color: "#30a0c8" };
 
 export const DAY_OFF_COLOR: Record<DayOffKind, string> = {
   libre: "#e2e8f0",
-  compensatorio: "#e2e8f0",
+  compensatorio: "#fde68a",
   vacacion: "#facc15",
   incapacidad: "#4ade80",
-  suspendido: "#fb923c",
+  suspendido: "#c084fc",
   baja: "#94a3b8",
 };
 export const NO_SHOW = { label: "No se presentó", color: "#f87171" };
+
+/** Franja del día sin turno en la línea de tiempo (fondo y texto), igual que en el CRM. */
+export const DAY_OFF_BAND: Record<DayOffKind | "no_show", { bg: string; fg: string }> = {
+  libre: { bg: "#f1f5f9", fg: "#334155" },
+  compensatorio: { bg: "#fefce8", fg: "#a16207" },
+  vacacion: { bg: "#fef9c3", fg: "#854d0e" },
+  incapacidad: { bg: "#dcfce7", fg: "#166534" },
+  suspendido: { bg: "#f3e8ff", fg: "#6b21a8" },
+  baja: { bg: "#f1f5f9", fg: "#334155" },
+  no_show: { bg: "#fee2e2", fg: "#991b1b" },
+};
 
 /** Turno habitual con esas horas ("HH:MM"), o undefined si es otro horario. */
 export const shiftKind = (start: string, end: string) => SHIFT_KINDS.find((k) => k.start === start && k.end === end);
@@ -32,3 +43,17 @@ export const shiftColor = (start: string, end: string) => shiftKind(start, end)?
 export const isNoShow = (d: ShiftDayOff) => (d.notes ?? "").trim().toLowerCase() === NO_SHOW.label.toLowerCase();
 
 export const dayOffColor = (d: ShiftDayOff) => (isNoShow(d) ? NO_SHOW.color : DAY_OFF_COLOR[d.kind]);
+
+export const dayOffBand = (d: ShiftDayOff) => DAY_OFF_BAND[isNoShow(d) ? "no_show" : d.kind];
+
+/** Hora como en el CRM: "08:00" → "8:00 a. m.", "15:30" → "3:30 p. m.". */
+export function ampm(hhmm: string) {
+  const [h, m] = hhmm.split(":").map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "a. m." : "p. m."}`;
+}
+
+/** Nombre corto del turno como en el CRM: "8–5", "Shortday 8–12" u "Personalizado". */
+export function shiftLabel(start: string, end: string) {
+  const k = shiftKind(start, end);
+  return k ? (k.short ? `Shortday ${k.label}` : k.label) : "Personalizado";
+}

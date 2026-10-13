@@ -514,13 +514,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .sch-track.editable { cursor: pointer; transition: box-shadow 0.25s; }
 .sch-track.editable:hover { box-shadow: inset 0 0 0 2px var(--accent); }
+/* Barras y días sin turno con el mismo estilo que Horarios del CRM (css/paginas/horarios.css). */
 .sch-bar {
-  position: absolute; top: 4px; bottom: 4px; display: flex; align-items: center; padding: 0 12px; overflow: hidden;
-  border-radius: var(--r-sm); animation: zeReveal 0.3s ease-out both;
+  position: absolute; top: 4px; bottom: 4px; display: flex; align-items: center; padding: 0 10px; overflow: hidden;
+  border-radius: 2px; animation: zeReveal 0.3s ease-out both;
 }
-.sch-bar span { position: relative; z-index: 1; font-size: 12px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.sch-bar-break { position: absolute; bottom: 0; height: 32%; background: repeating-linear-gradient(135deg, transparent 0 2px, var(--surface) 2px 4px); opacity: 0.7; }
-.sch-empty { position: absolute; inset: 0; display: flex; align-items: center; padding-left: 12px; font-size: 12px; font-style: italic; color: var(--muted-2); }
+.sch-bar span { position: relative; z-index: 1; font-size: 13px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sch-bar-break { position: absolute; bottom: 0; height: 30%; background: repeating-linear-gradient(135deg, transparent 0 3px, rgba(255, 255, 255, 0.95) 3px 5px); opacity: 0.7; }
+.sch-empty { position: absolute; inset: 0; display: flex; align-items: center; padding-left: 10px; font-size: 13px; font-style: italic; color: var(--muted-2); }
+.sch-empty.sch-off { font-style: normal; font-weight: 600; }
 .sch-weekcol { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sch-squares { display: flex; gap: 2px; }
 .sch-squares span { width: 12px; height: 20px; border-radius: 4px; background: var(--surface-2); }

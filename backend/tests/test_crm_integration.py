@@ -532,6 +532,32 @@ def test_crm_reads_week_as_shown_here(crm):
     assert [(d["work_date"], d["kind"]) for d in body["days_off"]] == [("2026-10-07", "libre")]
 
 
+def test_crm_sets_day_once_unless_admin(crm, db):
+    """El CRM asigna un día vacío una sola vez; con only_if_empty=false (administración) lo cambia."""
+    from app.models import CrmOutbox
+
+    client, headers = crm
+    emp = _hire(client)
+    url = "/api/integrations/crm/schedule-day"
+    dia = {"employee_id": emp["id"], "work_date": "2026-10-07", "by": "sup"}
+    assert client.post(url, json={**dia, "kind": "libre"}).status_code == 401
+
+    r = client.post(url, json={**dia, "kind": "turno", "start_time": "08:00", "end_time": "12:00"}, headers=headers)
+    assert r.status_code == 200, r.text
+    [a] = client.get("/api/schedules/assignments", params=WEEK).json()
+    assert (a["source"], a["break_minutes"]) == ("manual", 0)  # shortday: sin descanso
+    assert db.query(CrmOutbox).count() == 1  # vuelve al CRM
+
+    assert client.post(url, json={**dia, "kind": "vacacion"}, headers=headers).status_code == 409
+    r = client.post(url, json={**dia, "kind": "vacacion", "only_if_empty": False}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert client.get("/api/schedules/assignments", params=WEEK).json() == []
+    assert [(d["kind"], d["source"]) for d in client.get("/api/schedules/days-off", params=WEEK).json()] == [("vacacion", "rrhh")]
+
+    r = client.post(url, json={**dia, "kind": "quitar", "only_if_empty": False}, headers=headers)
+    assert r.status_code == 200 and client.get("/api/schedules/days-off", params=WEEK).json() == []
+
+
 def test_push_uses_crm_labels(db):
     from datetime import date
 

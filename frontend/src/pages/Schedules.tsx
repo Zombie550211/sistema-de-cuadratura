@@ -23,7 +23,7 @@ import {
   type Sync,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { DAY_OFF_COLOR, dayOffColor, isNoShow, NO_SHOW, OTHER_SHIFT, SHIFT_KINDS, shiftColor, shiftKind } from "../lib/shiftColors";
+import { ampm, DAY_OFF_COLOR, dayOffBand, dayOffColor, isNoShow, NO_SHOW, OTHER_SHIFT, SHIFT_KINDS, shiftColor, shiftLabel } from "../lib/shiftColors";
 import { addDays, fmtDateTime, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
@@ -442,14 +442,24 @@ export function Schedules({ area }: { area: Area }) {
                             {a ? (
                               <ShiftBar a={a} day={day} h0={h0} span={span} color={colorOf(a)} template={templateOf(a)} />
                             ) : offByKey.has(`${e.id}|${day}`) ? (
-                              <span className="sch-empty" title={offByKey.get(`${e.id}|${day}`)?.notes ?? undefined}>
-                                <span className="swatch" style={{ background: dayOffColor(offByKey.get(`${e.id}|${day}`)!), borderRadius: 4, marginRight: 8 }} />
+                              // Franja de color como en el CRM; el origen y la nota, en el title.
+                              <span
+                                className="sch-empty sch-off"
+                                style={{
+                                  background: dayOffBand(offByKey.get(`${e.id}|${day}`)!).bg,
+                                  color: dayOffBand(offByKey.get(`${e.id}|${day}`)!).fg,
+                                  boxShadow: `inset 3px 0 0 ${dayOffColor(offByKey.get(`${e.id}|${day}`)!)}`,
+                                }}
+                                title={[
+                                  offByKey.get(`${e.id}|${day}`)!.source === "crm" ? "Marcado en el CRM" : "Fijado por RRHH",
+                                  offByKey.get(`${e.id}|${day}`)!.notes,
+                                  canEdit ? "clic para cambiar" : null,
+                                ].filter(Boolean).join(" · ")}
+                              >
                                 {isNoShow(offByKey.get(`${e.id}|${day}`)!) ? NO_SHOW.label : DAY_OFF_LABEL[offByKey.get(`${e.id}|${day}`)!.kind]}
-                                {offByKey.get(`${e.id}|${day}`)!.source === "crm" ? " (CRM)" : " (RRHH)"}
-                                {canEdit ? " — clic para cambiar" : ""}
                               </span>
                             ) : (
-                              <span className="sch-empty">{canEdit ? "Sin turno — clic para asignar" : "Sin turno"}</span>
+                              <span className="sch-empty">Sin turno</span>
                             )}
                           </div>
                           <div className="sch-weekcol">
@@ -653,11 +663,11 @@ function ShiftBar({ a, day, h0, span, color, template }: { a: ShiftAssignment; d
     <div
       className="sch-bar"
       style={{ left: `${((s - h0) / span) * 100}%`, width: `${(len / span) * 100}%`, background: color, color: readableOn(color) }}
-      title={a.notes ?? undefined}
+      title={[a.source === "crm" ? "Vino del CRM" : "Asignado aquí", a.notes].filter(Boolean).join(" · ")}
     >
+      {/* Mismo texto que en el CRM: "8:00 a. m. – 5:00 p. m. · 8–5". */}
       <span>
-        {fmtTime(a.start_at)}–{fmtTime(a.end_at)} · {template?.name ?? (shiftKind(fmtTime(a.start_at), fmtTime(a.end_at)) ? (shiftKind(fmtTime(a.start_at), fmtTime(a.end_at))!.short ? "Shortday" : "Jornada completa") : "Personalizado")}
-        {a.source === "crm" && " · CRM"}
+        {ampm(fmtTime(a.start_at))} – {ampm(fmtTime(a.end_at))} · {template?.name ?? shiftLabel(fmtTime(a.start_at), fmtTime(a.end_at))}
       </span>
       {brk > 0 && <div className="sch-bar-break" style={{ left: `${brkLeft}%`, width: `${(brk / len) * 100}%` }} title={`Descanso de ${a.break_minutes} min`} />}
     </div>
