@@ -509,6 +509,29 @@ def test_crm_rest_days_keep_their_type(crm):
     assert [s["work_date"] for s in client.get("/api/schedules/assignments", params=WEEK).json()] == ["2026-10-05", "2026-10-07"]
 
 
+def test_crm_reads_week_as_shown_here(crm):
+    """El CRM muestra el horario de aquí (solo lectura): personal con su team, turnos en hora
+    local con sus horas desde la medianoche del día y días sin turno."""
+    client, headers = crm
+    _hire(client)
+    _send(client, headers, [_agent()])
+    url = "/api/integrations/crm/schedules-week"
+    assert client.get(url, params={"date_from": "2026-10-08"}).status_code == 401
+
+    r = client.get(url, params={"date_from": "2026-10-08"}, headers=headers)  # jueves → su lunes
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["date_from"], body["date_to"]) == ("2026-10-05", "2026-10-11")
+    [emp] = body["employees"]
+    assert (emp["full_name"], emp["crm_agent_id"], emp["team"]) == ("CARLOS PÉREZ", "A-100", "Ventas USA")
+    turnos = {a["work_date"]: (a["start"], a["end"], a["start_h"], a["end_h"], a["source"]) for a in body["assignments"]}
+    assert turnos == {
+        "2026-10-05": ("08:00", "17:00", 8, 17, "crm"),
+        "2026-10-06": ("22:00", "06:00", 22, 30, "crm"),  # nocturno: termina el día siguiente
+    }
+    assert [(d["work_date"], d["kind"]) for d in body["days_off"]] == [("2026-10-07", "libre")]
+
+
 def test_push_uses_crm_labels(db):
     from datetime import date
 
