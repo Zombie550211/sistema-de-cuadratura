@@ -145,7 +145,8 @@ def list_punches(
     limit: Annotated[int, Query(ge=1, le=10000)] = 500,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
-    if date_to < date_from or (date_to - date_from).days > 93:
+    # El límite de 3 meses es para listados generales; el historial de una sola persona va completo.
+    if date_to < date_from or ((date_to - date_from).days > 93 and not (employee_id or badge)):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rango de fechas inválido (máx. 3 meses)")
     start, end = _day_bounds(date_from, date_to)
     stmt = select(Punch).where(ACTIVE, Punch.punched_at >= start, Punch.punched_at < end)
@@ -170,7 +171,7 @@ def list_punches(
 def list_lateness(db: DB, _: Staff, date_from: date, date_to: date, area: AreaParam = None, employee_id: int | None = None):
     """Llegadas tarde por día con turno (entrada vs. inicio del turno), acumuladas por quincena:
     los primeros minutos que se perdonan no cuentan."""
-    if date_to < date_from or (date_to - date_from).days > 93:
+    if date_to < date_from or ((date_to - date_from).days > 93 and not employee_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rango de fechas inválido (máx. 3 meses)")
     return [LatenessOut(**vars(d)) for d in lateness(db, date_from, date_to, area, employee_id)]
 

@@ -52,6 +52,49 @@ function entry(punches: Punch[]) {
   return { checkIn: valid[0] ?? null, ignored: Math.max(valid.length - 1, 0) };
 }
 
+/** Agrupa las marcas por persona (empleado, o huella sin empleado) y, dentro, por día. */
+function groupPeople(items: Punch[]): PersonRow[] {
+  const byDay = new Map<string, DayRow>();
+  for (const p of items) {
+    const date = localDate(p.punched_at);
+    const key = `${date}|${p.badge}`;
+    if (!byDay.has(key)) {
+      byDay.set(key, {
+        key,
+        date,
+        badge: p.badge,
+        deviceId: p.device_id,
+        employeeId: p.employee?.id ?? null,
+        name: p.employee?.full_name ?? null,
+        code: p.employee?.code ?? null,
+        punches: [],
+        checkIn: null,
+        ignored: 0,
+      });
+    }
+    byDay.get(key)!.punches.push(p);
+  }
+  const byPerson = new Map<string, PersonRow>();
+  for (const d of byDay.values()) {
+    const punches = [...d.punches].sort((a, b) => a.punched_at.localeCompare(b.punched_at));
+    const day = { ...d, punches, ...entry(punches) };
+    const key = day.employeeId ? `e${day.employeeId}` : `b${day.badge}`;
+    if (!byPerson.has(key)) {
+      byPerson.set(key, { key, badge: day.badge, employeeId: day.employeeId, name: day.name, code: day.code, days: [] });
+    }
+    byPerson.get(key)!.days.push(day);
+  }
+  const list = [...byPerson.values()];
+  for (const p of list) p.days.sort((a, b) => a.date.localeCompare(b.date));
+  list.sort(
+    (a, b) =>
+      Number(!a.name) - Number(!b.name) ||
+      (a.name ?? "").localeCompare(b.name ?? "") ||
+      a.badge.localeCompare(b.badge, undefined, { numeric: true }),
+  );
+  return list;
+}
+
 function punchRole(r: DayRow, p: Punch): { cls: string; title: string } {
   const edited = p.original_punched_at ? ` · corregida (el reloj marcó ${fmtTimeSec(p.original_punched_at)})` : "";
   const cls = p.original_punched_at ? " edited" : "";
@@ -130,47 +173,7 @@ export function Punches() {
     late.reload();
   }
 
-  const people = useMemo(() => {
-    const byDay = new Map<string, DayRow>();
-    for (const p of data?.items ?? []) {
-      const date = localDate(p.punched_at);
-      const key = `${date}|${p.badge}`;
-      if (!byDay.has(key)) {
-        byDay.set(key, {
-          key,
-          date,
-          badge: p.badge,
-          deviceId: p.device_id,
-          employeeId: p.employee?.id ?? null,
-          name: p.employee?.full_name ?? null,
-          code: p.employee?.code ?? null,
-          punches: [],
-          checkIn: null,
-          ignored: 0,
-        });
-      }
-      byDay.get(key)!.punches.push(p);
-    }
-    const byPerson = new Map<string, PersonRow>();
-    for (const d of byDay.values()) {
-      const punches = [...d.punches].sort((a, b) => a.punched_at.localeCompare(b.punched_at));
-      const day = { ...d, punches, ...entry(punches) };
-      const key = day.employeeId ? `e${day.employeeId}` : `b${day.badge}`;
-      if (!byPerson.has(key)) {
-        byPerson.set(key, { key, badge: day.badge, employeeId: day.employeeId, name: day.name, code: day.code, days: [] });
-      }
-      byPerson.get(key)!.days.push(day);
-    }
-    const list = [...byPerson.values()];
-    for (const p of list) p.days.sort((a, b) => a.date.localeCompare(b.date));
-    list.sort(
-      (a, b) =>
-        Number(!a.name) - Number(!b.name) ||
-        (a.name ?? "").localeCompare(b.name ?? "") ||
-        a.badge.localeCompare(b.badge, undefined, { numeric: true }),
-    );
-    return list;
-  }, [data]);
+  const people = useMemo(() => groupPeople(data?.items ?? []), [data]);
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -318,10 +321,9 @@ export function Punches() {
       )}
 
       {open && !dialog && (
-        <PersonWeek
+        <PersonHistory
           person={open}
-          week={week}
-          lateByKey={lateByKey}
+          showDoubles={showDoubles}
           canEdit={canEdit}
           onAction={setDialog}
           onClose={() => setOpenKey(null)}
@@ -334,24 +336,55 @@ export function Punches() {
   );
 }
 
-/** Ventana con la semana de una persona: los 7 días, sus marcas y la llegada tarde de cada uno. */
-function PersonWeek({
+/** Desde aquí se pide el historial completo de una persona (el backend no limita el rango si
+ *  se filtra por empleado o huella). */
+const HISTORY_FROM = "2000-01-01";
+
+/** Ventana con todo el historial de una persona en el local: cada semana con marcas, sus 7 días,
+ *  las marcas y la llegada tarde de cada uno. La semana más reciente va primero. */
+function PersonHistory({
   person,
-  week,
-  lateByKey,
+  showDoubles,
   canEdit,
   onAction,
   onClose,
 }: {
   person: PersonRow;
-  week: string;
-  lateByKey: Map<string, Lateness>;
+  showDoubles: boolean;
   canEdit: boolean;
   onAction: (d: Dialog) => void;
   onClose: () => void;
 }) {
-  const byDate = new Map(person.days.map((d) => [d.date, d]));
-  const dates = Array.from({ length: 7 }, (_, i) => addDays(week, i));
+  const deviceId = person.days[0].deviceId;
+  const to = today();
+  const history = useAsync(
+    () =>
+      api.get<Page<Punch>>("/attendance/punches", {
+        date_from: HISTORY_FROM,
+        date_to: to,
+        device_id: deviceId,
+        ...(person.employeeId ? { employee_id: person.employeeId } : { badge: person.badge }),
+        include_double_taps: showDoubles,
+        limit: 10000,
+      }),
+    [person.key, deviceId, showDoubles],
+  );
+  const late = useAsync(
+    () =>
+      person.employeeId
+        ? api.get<Lateness[]>("/attendance/lateness", { date_from: HISTORY_FROM, date_to: to, employee_id: person.employeeId })
+        : Promise.resolve([]),
+    [person.employeeId],
+  );
+  const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
+
+  // Sin empleado, una huella puede tener marcas de alguien vinculado antes: solo las de esta persona.
+  const days = useMemo(
+    () => groupPeople(history.data?.items ?? []).find((p) => p.key === person.key)?.days ?? person.days,
+    [history.data, person],
+  );
+  const byDate = new Map(days.map((d) => [d.date, d]));
+  const weeks = [...new Set(days.map((d) => weekStart(d.date)))].sort().reverse();
 
   function actions(r: DayRow): RowAction[] {
     const list: RowAction[] = [{ label: "Editar marcas", onClick: () => onAction({ kind: "edit", row: r }) }];
@@ -363,8 +396,10 @@ function PersonWeek({
   return (
     <Modal title={person.name ?? `ID ${person.badge} sin empleado`} onClose={onClose} wide>
       <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
-        {person.code && `${person.code} · `}Huella {person.badge} · {fmtWeek(week)}
+        {person.code && `${person.code} · `}Huella {person.badge} · {days.length} día{days.length === 1 ? "" : "s"} con marcas
+        {history.loading && " · cargando historial…"}
       </p>
+      {history.error && <div className="alert" style={{ marginBottom: 16 }}>{history.error}</div>}
       {!person.name && canEdit && (
         <div className="alert info" style={{ marginBottom: 16 }}>
           Esta huella no tiene empleado.{" "}
@@ -383,8 +418,12 @@ function PersonWeek({
               {canEdit && <th className="row-actions" />}
             </tr>
           </thead>
-          <tbody>
-            {dates.map((date) => {
+          {weeks.map((week) => (
+          <tbody key={week}>
+            <tr className="week-head">
+              <td colSpan={2 + Number(!!person.employeeId) + Number(canEdit)}>{fmtWeek(week)}</td>
+            </tr>
+            {Array.from({ length: 7 }, (_, i) => addDays(week, i)).map((date) => {
               const r = byDate.get(date);
               return (
                 <tr key={date}>
@@ -419,6 +458,7 @@ function PersonWeek({
               );
             })}
           </tbody>
+          ))}
         </table>
       </div>
       <div className="modal-foot">
