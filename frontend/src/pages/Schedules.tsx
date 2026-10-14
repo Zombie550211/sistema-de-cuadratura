@@ -29,12 +29,15 @@ import { useAsync } from "../lib/useAsync";
 
 const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
 /** Tarjetas del día en el horario: lo que RRHH puede marcar en lugar de un turno. */
-const POP_DAY_OFF: [DayOffKind, string][] = [
-  ["libre", "Día libre"],
-  ["compensatorio", "Compensatorio"],
-  ["suspendido", "Suspendido"],
-  ["baja", "De baja"],
-  ["incapacidad", "Incapacidad"],
+const POP_DAY_OFF: { key: DayOffKind | "no_show"; kind: DayOffKind; label: string; color: string }[] = [
+  { key: "libre", kind: "libre", label: "Día libre", color: DAY_OFF_COLOR.libre },
+  { key: "compensatorio", kind: "compensatorio", label: "Compensatorio", color: DAY_OFF_COLOR.compensatorio },
+  { key: "suspendido", kind: "suspendido", label: "Suspendido", color: DAY_OFF_COLOR.suspendido },
+  { key: "baja", kind: "baja", label: "De baja", color: DAY_OFF_COLOR.baja },
+  { key: "incapacidad", kind: "incapacidad", label: "Incapacidad", color: DAY_OFF_COLOR.incapacidad },
+  { key: "vacacion", kind: "vacacion", label: "Vacación", color: DAY_OFF_COLOR.vacacion },
+  // Como en el CRM: «No se presentó» es un día libre con esa nota.
+  { key: "no_show", kind: "libre", label: NO_SHOW.label, color: NO_SHOW.color },
 ];
 const DOW = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 /** Por debajo de este número de agentes en turno, la hora se marca como descubierta. */
@@ -240,9 +243,11 @@ export function Schedules({ area }: { area: Area }) {
   }
 
   /** Marca el día (libre, compensatorio, suspendido…): quita el turno y, si ya había otro tipo, lo cambia. */
-  function giveDayOff(kind: DayOffKind) {
+  function giveDayOff(opt: (typeof POP_DAY_OFF)[number]) {
     if (!pop) return;
-    return popAction(() => api.post("/schedules/days-off", { employee_id: pop.employee.id, work_date: pop.day, kind }));
+    // La nota «No se presentó» se pone o se quita; las demás notas del día se conservan.
+    const notes = opt.key === "no_show" ? NO_SHOW.label : pop.dayOff && isNoShow(pop.dayOff) ? "" : undefined;
+    return popAction(() => api.post("/schedules/days-off", { employee_id: pop.employee.id, work_date: pop.day, kind: opt.kind, notes }));
   }
 
   function removeDayOff() {
@@ -548,15 +553,15 @@ export function Schedules({ area }: { area: Area }) {
                   Quitar turno del día
                 </button>
               )}
-              {POP_DAY_OFF.filter(([kind]) => kind !== pop.dayOff?.kind).map(([kind, label]) => (
-                <button key={kind} className="btn ghost sm" disabled={busy} onClick={() => giveDayOff(kind)}>
-                  <span className="swatch" style={{ background: DAY_OFF_COLOR[kind], borderRadius: 4, marginRight: 6 }} />
-                  {label}
+              {POP_DAY_OFF.filter((o) => o.key !== (pop.dayOff && (isNoShow(pop.dayOff) ? "no_show" : pop.dayOff.kind))).map((o) => (
+                <button key={o.key} className="btn ghost sm" disabled={busy} onClick={() => giveDayOff(o)}>
+                  <span className="swatch" style={{ background: o.color, borderRadius: 4, marginRight: 6 }} />
+                  {o.label}
                 </button>
               ))}
               {pop.dayOff && (
                 <button className="btn ghost sm" disabled={busy} onClick={removeDayOff}>
-                  Quitar {DAY_OFF_LABEL[pop.dayOff.kind].toLowerCase()}
+                  Quitar {(isNoShow(pop.dayOff) ? NO_SHOW.label : DAY_OFF_LABEL[pop.dayOff.kind]).toLowerCase()}
                 </button>
               )}
             </div>
