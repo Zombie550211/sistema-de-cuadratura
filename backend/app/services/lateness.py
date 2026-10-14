@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Employee, Punch, ShiftAssignment
+from app.models import Employee, Punch, ShiftAssignment, ShiftDayOff
 
 
 @dataclass
@@ -43,7 +43,12 @@ def lateness(
     # Se empieza desde el inicio de la quincena para acumular bien los días previos al rango.
     start = quincena_start(date_from)
 
-    shift_stmt = select(ShiftAssignment).where(ShiftAssignment.work_date.between(start, date_to))
+    # Un día de descanso (libre, vacación, incapacidad…) nunca cuenta como llegada tarde, aunque
+    # por error también tenga turno.
+    day_off = select(ShiftDayOff.id).where(
+        ShiftDayOff.employee_id == ShiftAssignment.employee_id, ShiftDayOff.work_date == ShiftAssignment.work_date
+    )
+    shift_stmt = select(ShiftAssignment).where(ShiftAssignment.work_date.between(start, date_to), ~day_off.exists())
     punch_stmt = select(Punch.employee_id, Punch.punched_at).where(
         Punch.employee_id.is_not(None),
         Punch.deleted_at.is_(None),

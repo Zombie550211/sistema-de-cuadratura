@@ -7,6 +7,7 @@ import { RowMenu, type RowAction } from "../components/RowMenu";
 import {
   api,
   ApiError,
+  DAY_OFF_LABEL,
   LATE_ALLOWANCE,
   localName,
   type Employee,
@@ -15,8 +16,11 @@ import {
   type Locales,
   type Page,
   type Punch,
+  type ShiftAssignment,
+  type ShiftDayOff,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
+import { dayOffColor, isNoShow, NO_SHOW } from "../lib/shiftColors";
 import { addDays, fmtLongDate, fmtMinutes, fmtRange, fmtTime, fmtHms, fmtTimeSec, localDate, quincena, today } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
@@ -420,11 +424,37 @@ function PersonQuincena({
   const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
   const lateTotal = (late.data ?? []).filter((l) => l.late_minutes > 0).reduce((sum, l) => sum + l.late_seconds, 0);
 
+  // Horario del periodo (turnos y días libres) para compararlo con las marcas: así se ve qué
+  // día del fin de semana le tocaba descansar (sábado o domingo, según la semana).
+  const schedule = useAsync(
+    () =>
+      person.employeeId
+        ? Promise.all([
+            api.get<ShiftAssignment[]>("/schedules/assignments", { date_from: from, date_to: to, employee_id: person.employeeId }),
+            api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: from, date_to: to }),
+          ])
+        : Promise.resolve(null),
+    [person.employeeId, from, to],
+  );
+  const shiftByDate = new Map((schedule.data?.[0] ?? []).map((a) => [a.work_date, a]));
+  const offByDate = new Map((schedule.data?.[1] ?? []).filter((d) => d.employee_id === person.employeeId).map((d) => [d.work_date, d]));
+  const hasSchedule = !!person.employeeId && !!schedule.data;
+
   // Sin empleado, una huella puede tener marcas de alguien vinculado antes: solo las de esta persona.
   const days = useMemo(() => groupPeople(punches.data?.items ?? []).find((p) => p.key === person.key)?.days ?? [], [punches.data, person.key]);
   const byDate = new Map(days.map((d) => [d.date, d]));
   const dates: string[] = [];
   for (let d = from; d <= to; d = addDays(d, 1)) dates.push(d);
+
+  /** Comparación del día con el horario: faltó a un turno o marcó en su día de descanso. */
+  function check(date: string): "falta" | "descanso" | null {
+    if (!hasSchedule) return null;
+    const off = offByDate.get(date);
+    if (byDate.has(date)) return off && !isNoShow(off) ? "descanso" : null;
+    return shiftByDate.has(date) && date < today() ? "falta" : null;
+  }
+  const faltas = dates.filter((d) => check(d) === "falta").length;
+  const workedOff = dates.filter((d) => check(d) === "descanso").length;
 
   function actions(r: DayRow): RowAction[] {
     const list: RowAction[] = [{ label: "Editar marcas", onClick: () => onAction({ kind: "edit", row: r }) }];
@@ -441,6 +471,8 @@ function PersonQuincena({
       <div className="row" style={{ gap: 12, marginBottom: 16, alignItems: "center" }}>
         <span className="sch-week">{isCut ? `Corte: ${fmtRange(range)}` : fmtRange(range)}</span>
         {lateTotal > 0 && <span className="badge danger" title="Total de llegada tarde en el periodo">Tarde en total: {fmtHms(lateTotal)}</span>}
+        {faltas > 0 && <span className="badge danger" title="Días con turno en el horario y sin marcas">{faltas} falta{faltas === 1 ? "" : "s"}</span>}
+        {workedOff > 0 && <span className="badge warn" title="Días que el horario marca como descanso y tienen marcas">Marcó {workedOff} día{workedOff === 1 ? "" : "s"} de descanso</span>}
         {(punches.loading || late.loading) && <div className="spinner" style={{ width: 16, height: 16 }} />}
       </div>
       {punches.error && <div className="alert" style={{ marginBottom: 16 }}>{punches.error}</div>}
@@ -457,6 +489,7 @@ function PersonQuincena({
           <thead>
             <tr>
               <th>Día</th>
+              {person.employeeId && <th>Horario</th>}
               <th>Marcas</th>
               {person.employeeId && <th>Llegada tarde</th>}
               {canEdit && <th className="row-actions" />}
@@ -465,9 +498,28 @@ function PersonQuincena({
           <tbody>
             {dates.map((date) => {
               const r = byDate.get(date);
+              const shift = shiftByDate.get(date);
+              const off = offByDate.get(date);
+              const flag = check(date);
               return (
                 <tr key={date}>
                   <td className="nowrap">{fmtLongDate(date)}</td>
+                  {person.employeeId && (
+                    <td className="nowrap">
+                      {shift ? (
+                        <span title={shift.source === "crm" ? "Turno del CRM" : "Turno asignado aquí"}>
+                          {fmtTime(shift.start_at)} – {fmtTime(shift.end_at)}
+                        </span>
+                      ) : off ? (
+                        <span title={off.notes ?? undefined}>
+                          <span className="swatch" style={{ background: dayOffColor(off), borderRadius: 4, marginRight: 6 }} />
+                          {isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]}
+                        </span>
+                      ) : (
+                        <span className="muted">{schedule.loading ? "…" : "Sin horario"}</span>
+                      )}
+                    </td>
+                  )}
                   <td>
                     {r ? (
                       <>
@@ -486,13 +538,22 @@ function PersonQuincena({
                             +{r.ignored} marca{r.ignored === 1 ? "" : "s"} después de la entrada (no cuenta{r.ignored === 1 ? "" : "n"})
                           </div>
                         )}
+                        {flag === "descanso" && (
+                          <span className="badge warn" style={{ marginTop: 4 }} title="El horario marca este día como descanso">
+                            Marcó en su día de descanso
+                          </span>
+                        )}
                       </>
+                    ) : flag === "falta" ? (
+                      <span className="badge danger" title="Tenía turno y no hay marcas">
+                        Sin marcas · faltó
+                      </span>
                     ) : (
-                      <span className="muted">Sin marcas</span>
+                      <span className="muted">{off ? "Sin marcas (descanso)" : "Sin marcas"}</span>
                     )}
                   </td>
                   {person.employeeId &&
-                    (r ? <LateCell late={lateByKey.get(`${person.employeeId}|${date}`)} /> : <td className="nowrap"><span className="muted">—</span></td>)}
+                    (r ? <LateCell late={lateByKey.get(`${person.employeeId}|${date}`)} off={off} /> : <td className="nowrap"><span className="muted">—</span></td>)}
                   {canEdit && <td className="num row-actions">{r && <RowMenu actions={actions(r)} />}</td>}
                 </tr>
               );
@@ -552,8 +613,17 @@ function CutDatePicker({ initial, onApply, onClose }: { initial: [string, string
 
 /** Llegada tarde del día: minutos tarde contra el turno y cuánto de eso ya cuenta, porque en la
  *  quincena se perdonan los primeros LATE_ALLOWANCE minutos acumulados. */
-function LateCell({ late }: { late?: Lateness }) {
-  if (!late) return <td className="nowrap"><span className="muted" title="No tiene turno asignado en Horarios este día">Sin turno</span></td>;
+function LateCell({ late, off }: { late?: Lateness; off?: ShiftDayOff }) {
+  if (off) {
+    return (
+      <td className="nowrap">
+        <span className="muted" title="Día de descanso en el horario: no cuenta como llegada tarde">
+          {isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]} · no cuenta
+        </span>
+      </td>
+    );
+  }
+  if (!late) return <td className="nowrap"><span className="muted" title="No tiene turno asignado en Horarios este día: no cuenta como llegada tarde">Sin turno · no cuenta</span></td>;
   const turno = `Turno desde las ${fmtTime(late.shift_start)}`;
   if (!late.late_minutes) {
     return (
