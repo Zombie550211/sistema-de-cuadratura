@@ -8,9 +8,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, Staff
 from app.core.config import get_settings
-from app.models import AREAS, Device, Employee, ImportBatch, Punch, ShiftAssignment
+from app.models import AREAS, AppSetting, Device, Employee, ImportBatch, Punch, ShiftAssignment
 from app.schemas import (
     BadgeLinkIn,
+    CutDate,
     DashboardSummary,
     DeviceOut,
     ImportBatchOut,
@@ -164,6 +165,41 @@ def list_punches(
         stmt.order_by(Punch.punched_at.desc(), Punch.badge).limit(limit).offset(offset)
     ).all()
     return Page(items=items, total=total)
+
+
+CUT_DATE = "marcaciones.fecha_corte"
+
+
+@router.get("/attendance/cut-date", response_model=CutDate | None)
+def get_cut_date(db: DB, _: Staff):
+    """Fecha de corte guardada (la misma para todos), o null si se ve por quincena."""
+    setting = db.get(AppSetting, CUT_DATE)
+    return CutDate(**setting.value) if setting else None
+
+
+@router.put("/attendance/cut-date", response_model=CutDate)
+def set_cut_date(data: CutDate, db: DB, user: HR):
+    """Guarda la fecha de corte; queda así hasta que se cambie o se quite."""
+    if data.date_to < data.date_from or (data.date_to - data.date_from).days > 93:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rango de fechas inválido (máx. 3 meses)")
+    value = data.model_dump(mode="json")
+    setting = db.get(AppSetting, CUT_DATE)
+    if setting is None:
+        db.add(AppSetting(key=CUT_DATE, value=value, updated_by_id=user.id))
+    else:
+        setting.value, setting.updated_by_id = value, user.id
+    audit.record(db, user, "fecha_corte", "app_setting", CUT_DATE, value)
+    db.commit()
+    return data
+
+
+@router.delete("/attendance/cut-date", status_code=204)
+def clear_cut_date(db: DB, user: HR):
+    setting = db.get(AppSetting, CUT_DATE)
+    if setting is not None:
+        audit.record(db, user, "quitar_fecha_corte", "app_setting", CUT_DATE, setting.value)
+        db.delete(setting)
+        db.commit()
 
 
 @router.get("/attendance/lateness", response_model=list[LatenessOut])

@@ -442,6 +442,13 @@ class BadgeLinkIn(BaseModel):
     employee_id: int
 
 
+class CutDate(BaseModel):
+    """Fecha de corte de Marcaciones: de date_from hasta date_to, incluidos."""
+
+    date_from: date
+    date_to: date
+
+
 class LatenessOut(BaseModel):
     employee_id: int
     date: date

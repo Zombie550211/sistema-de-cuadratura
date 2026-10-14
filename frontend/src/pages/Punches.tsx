@@ -6,6 +6,9 @@ import { Modal } from "../components/Modal";
 import { RowMenu, type RowAction } from "../components/RowMenu";
 import {
   api,
+  type CutDate,
+  type DayOffKind,
+  type Device,
   ApiError,
   DAY_OFF_LABEL,
   LATE_ALLOWANCE,
@@ -22,6 +25,7 @@ import {
 import { useAuth } from "../lib/auth";
 import { dayOffColor, isNoShow, NO_SHOW } from "../lib/shiftColors";
 import { addDays, fmtLongDate, fmtMinutes, fmtRange, fmtTime, fmtHms, fmtTimeSec, localDate, quincena, today } from "../lib/format";
+import { downloadBlob, tableImage, type ImageCell, type ImageColumn } from "../lib/tableImage";
 import { useAsync } from "../lib/useAsync";
 
 interface DayRow {
@@ -120,10 +124,14 @@ export function Punches() {
   const [search, setSearch] = useState("");
   const [showDoubles, setShowDoubles] = useState(true);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [dialog, setDialog] = useState<Dialog>(null);
   // Fecha de corte: si está puesta, en lugar de la quincena se ve de la fecha de inicio hasta el
-  // día de corte (las marcas y las llegadas tarde se calculan solo hasta ese día).
+  // día de corte (las marcas y las llegadas tarde se calculan solo hasta ese día). Se guarda en el
+  // servidor, la misma para todos, y queda hasta que RRHH la cambie o la quite.
   const [cut, setCut] = useState<[string, string] | null>(null);
+  const [cutError, setCutError] = useState<string | null>(null);
   const [pickingCut, setPickingCut] = useState(false);
   const [from, to] = cut ?? quin;
   const periodDays = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
@@ -132,7 +140,8 @@ export function Punches() {
   const tabs = (locales.data?.devices ?? []).filter((d) => d.punches > 0);
   const [lastDevice, setLastDevice] = useState<number | null>(null);
   const wanted = Number(params.get("local")) || lastDevice;
-  const deviceId = tabs.find((d) => d.id === wanted)?.id ?? tabs[0]?.id ?? null;
+  const device = tabs.find((d) => d.id === wanted) ?? tabs[0] ?? null;
+  const deviceId = device?.id ?? null;
 
   // Sin fecha en la URL, se abre en la quincena y el local del último archivo subido.
   useEffect(() => {
@@ -178,9 +187,23 @@ export function Punches() {
     setOpenKey(key);
   }
 
-  function moveQuin(r: [string, string]) {
-    setCut(null);
-    setQuin(r);
+  useEffect(() => {
+    api
+      .get<CutDate | null>("/attendance/cut-date")
+      .then((c) => setCut(c ? [c.date_from, c.date_to] : null))
+      .catch(() => {});
+  }, []);
+
+  async function saveCut(r: [string, string] | null) {
+    setCutError(null);
+    try {
+      if (r) await api.put("/attendance/cut-date", { date_from: r[0], date_to: r[1] });
+      else await api.delete("/attendance/cut-date");
+      setCut(r);
+      setPickingCut(false);
+    } catch (err) {
+      setCutError((err as ApiError).message);
+    }
   }
 
   function changed() {
@@ -198,6 +221,7 @@ export function Punches() {
   }, [people, search]);
 
   const open = people.find((p) => p.key === openKey) ?? null;
+  const editing = people.find((p) => p.key === editingKey) ?? null;
 
   function lateSummary(p: PersonRow) {
     const list = p.employeeId ? p.days.map((d) => lateByKey.get(`${p.employeeId}|${d.date}`)).filter((l) => !!l?.late_minutes) : [];
@@ -237,20 +261,27 @@ export function Punches() {
       )}
 
       <div className="card row">
-        <div className="row" style={{ gap: 4, alignSelf: "flex-end" }}>
-          <button className="icon-btn" onClick={() => moveQuin(quincena(addDays(quin[0], -1)))} aria-label="Quincena anterior">
-            <IconChevronLeft width={20} height={20} />
-          </button>
-          <span className="sch-week">{cut ? `Corte: ${fmtRange(cut)}` : fmtRange(quin)}</span>
-          <button className="icon-btn" onClick={() => moveQuin(quincena(addDays(quin[1], 1)))} aria-label="Quincena siguiente">
-            <IconChevronRight width={20} height={20} />
-          </button>
-          {latestQuin && (cut || latestQuin[0] !== quin[0]) && (
-            <button className="btn ghost sm" onClick={() => moveQuin(latestQuin)}>
-              Último archivo
+        {cut ? (
+          // Con fecha de corte guardada no se navega por quincenas: se quita con la ✕ o se cambia.
+          <div className="row" style={{ gap: 4, alignSelf: "flex-end" }}>
+            <span className="sch-week" title="Fecha de corte guardada">Corte: {fmtRange(cut)}</span>
+          </div>
+        ) : (
+          <div className="row" style={{ gap: 4, alignSelf: "flex-end" }}>
+            <button className="icon-btn" onClick={() => setQuin(quincena(addDays(quin[0], -1)))} aria-label="Quincena anterior">
+              <IconChevronLeft width={20} height={20} />
             </button>
-          )}
-        </div>
+            <span className="sch-week">{fmtRange(quin)}</span>
+            <button className="icon-btn" onClick={() => setQuin(quincena(addDays(quin[1], 1)))} aria-label="Quincena siguiente">
+              <IconChevronRight width={20} height={20} />
+            </button>
+            {latestQuin && latestQuin[0] !== quin[0] && (
+              <button className="btn ghost sm" onClick={() => setQuin(latestQuin)}>
+                Último archivo
+              </button>
+            )}
+          </div>
+        )}
         <label className="field" style={{ flex: 1, minWidth: 200 }}>
           <span>Buscar</span>
           <input className="input" placeholder="Nombre, código o huella" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -260,11 +291,16 @@ export function Punches() {
             <input type="checkbox" checked={showDoubles} onChange={(e) => setShowDoubles(e.target.checked)} /> Mostrar dobles marcas
           </label>
           <div className="row" style={{ gap: 4 }}>
-            <button className={`btn sm${cut ? "" : " ghost"}`} onClick={() => setPickingCut(true)} title="Calcular desde una fecha de inicio hasta la fecha de corte">
+            <button
+              className={`btn sm${cut ? "" : " ghost"}`}
+              disabled={!canEdit}
+              onClick={() => setPickingCut(true)}
+              title={canEdit ? "Calcular desde una fecha de inicio hasta la fecha de corte (queda guardada para todos)" : "Solo RRHH cambia la fecha de corte"}
+            >
               {cut ? `Corte: ${fmtRange(cut)}` : "Fecha de corte"}
             </button>
-            {cut && (
-              <button className="icon-btn" onClick={() => setCut(null)} aria-label="Quitar fecha de corte" title="Quitar fecha de corte">
+            {cut && canEdit && (
+              <button className="icon-btn" onClick={() => saveCut(null)} aria-label="Quitar fecha de corte" title="Quitar fecha de corte">
                 <IconX width={16} height={16} />
               </button>
             )}
@@ -273,6 +309,7 @@ export function Punches() {
       </div>
 
       {error && <div className="alert">{error}</div>}
+      {cutError && !pickingCut && <div className="alert">{cutError}</div>}
       {data && data.total > data.items.length && (
         <div className="alert info">Mostrando {data.items.length} de {data.total} marcas del periodo.</div>
       )}
@@ -287,7 +324,12 @@ export function Punches() {
         <div className="card">
           <div className="card-head">
             <h3>Empleados</h3>
-            <span className="caption">{shown.length} personas</span>
+            <div className="row" style={{ gap: 12, alignItems: "center" }}>
+              <span className="caption">{shown.length} personas</span>
+              <button className="btn ghost sm" onClick={() => setExporting(true)} title="Descargar la tabla del local como imagen">
+                Descargar imagen
+              </button>
+            </div>
           </div>
           <div className="table-wrap">
             <table className="table">
@@ -340,7 +382,20 @@ export function Punches() {
                           </>
                         )}
                       </td>
-                      <td className="num">
+                      <td className="num nowrap">
+                        {canEdit && (
+                          <button
+                            className="btn ghost sm"
+                            style={{ marginRight: 8 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingKey(p.key);
+                            }}
+                            title="Corregir o eliminar marcas de esta persona en el periodo"
+                          >
+                            Editar
+                          </button>
+                        )}
                         <IconChevronRight width={18} height={18} className="muted" />
                       </td>
                     </tr>
@@ -366,11 +421,23 @@ export function Punches() {
       {pickingCut && (
         <CutDatePicker
           initial={cut ?? [quincena(today())[0], today()]}
-          onApply={(r) => {
-            setCut(r);
-            setPickingCut(false);
-          }}
+          error={cutError}
+          onApply={saveCut}
           onClose={() => setPickingCut(false)}
+        />
+      )}
+      {exporting && device && (
+        <DownloadImage device={device} range={[from, to]} people={people} lateness={late.data ?? []} onClose={() => setExporting(false)} />
+      )}
+      {editing && (
+        <EditPerson
+          person={editing}
+          range={[from, to]}
+          onChanged={() => {
+            reload();
+            late.reload();
+          }}
+          onDone={() => setEditingKey(null)}
         />
       )}
       {dialog?.kind === "edit" && <EditDay row={dialog.row} onChanged={reload} onDone={changed} />}
@@ -579,8 +646,188 @@ function PersonQuincena({
   );
 }
 
+/** Tipos de día que van como columna en la imagen (si alguien los tiene en el periodo). */
+const IMAGE_KINDS: [DayOffKind, string][] = [
+  ["vacacion", "Vacación"],
+  ["incapacidad", "Incapacidad"],
+  ["compensatorio", "Compensatorio"],
+  ["suspendido", "Suspendido"],
+  ["baja", "De baja"],
+];
+
+interface ImageRow {
+  id: number;
+  name: string;
+  code: string;
+  lateSeconds: number;
+  noShow: number;
+  kinds: Partial<Record<DayOffKind, number>>;
+}
+
+/** Imagen de la tabla del local: RRHH quita a quien no quiere mostrar y la descarga en PNG. Van los
+ *  empleados que marcaron en este local en el periodo y los activos que tienen huella de este local. */
+function DownloadImage({
+  device,
+  range,
+  people,
+  lateness,
+  onClose,
+}: {
+  device: Device;
+  range: [string, string];
+  people: PersonRow[];
+  lateness: Lateness[];
+  onClose: () => void;
+}) {
+  const [from, to] = range;
+  const local = localName(device);
+  const extra = useAsync(async () => {
+    const employees: Employee[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await api.get<Page<Employee>>("/employees", { status: "activo", limit: 500, offset });
+      employees.push(...page.items);
+      if (employees.length >= page.total || !page.items.length) break;
+    }
+    const daysOff = await api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: from, date_to: to });
+    return { employees, daysOff };
+  }, [from, to]);
+
+  const rows = useMemo<ImageRow[]>(() => {
+    if (!extra.data) return [];
+    const found = new Map<number, { name: string; code: string }>();
+    for (const p of people) if (p.employeeId) found.set(p.employeeId, { name: p.name ?? "", code: p.code ?? "" });
+    for (const e of extra.data.employees) {
+      if (device.fingerprint_key && e.fingerprints?.[device.fingerprint_key]) found.set(e.id, { name: e.full_name, code: e.code });
+    }
+    const past = today();
+    return [...found]
+      .map(([id, info]) => {
+        const late = lateness.filter((l) => l.employee_id === id);
+        const off = extra.data!.daysOff.filter((d) => d.employee_id === id);
+        const kinds: ImageRow["kinds"] = {};
+        for (const d of off) if (!isNoShow(d)) kinds[d.kind] = (kinds[d.kind] ?? 0) + 1;
+        return {
+          id,
+          ...info,
+          lateSeconds: late.filter((l) => l.late_minutes > 0).reduce((sum, l) => sum + l.late_seconds, 0),
+          // Días con turno sin marcas (ya pasados) y días marcados como «No se presentó».
+          noShow: late.filter((l) => !l.check_in && l.date < past).length + off.filter(isNoShow).length,
+          kinds,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [extra.data, people, lateness, device.fingerprint_key]);
+
+  const [hidden, setHidden] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const selected = rows.filter((r) => !hidden.has(r.id));
+
+  function toggle(id: number) {
+    const next = new Set(hidden);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setHidden(next);
+  }
+
+  async function download() {
+    setBusy(true);
+    setError(null);
+    try {
+      const kinds = IMAGE_KINDS.filter(([k]) => selected.some((r) => r.kinds[k]));
+      const columns: ImageColumn[] = [
+        { label: "Empleado" },
+        { label: "Tiempo tarde", align: "center" },
+        { label: "No se presentó", align: "center" },
+        ...kinds.map(([, label]) => ({ label, align: "center" as const })),
+      ];
+      const count = (n: number | undefined): ImageCell => (n ? { text: `${n} día${n === 1 ? "" : "s"}` } : { text: "—", muted: true });
+      const cells: ImageCell[][] = selected.map((r) => [
+        { text: r.name },
+        r.lateSeconds ? { text: fmtHms(r.lateSeconds), danger: true } : { text: "—", muted: true },
+        r.noShow ? { ...count(r.noShow), danger: true } : count(0),
+        ...kinds.map(([k]) => count(r.kinds[k])),
+      ]);
+      const blob = await tableImage({
+        title: `Marcaciones · Local ${local}`,
+        subtitle: `${fmtRange(range)} · ${selected.length} empleado${selected.length === 1 ? "" : "s"}`,
+        columns,
+        rows: cells,
+        footer: "No se presentó: días con turno sin marcas y días marcados «No se presentó». Tiempo tarde: suma de las llegadas tarde del periodo.",
+      });
+      downloadBlob(blob, `marcaciones-${local}-${from}-a-${to}.png`);
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Descargar imagen · Local ${local}`} onClose={onClose}>
+      <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
+        {fmtRange(range)} · Quite a los empleados que no quiere mostrar en la imagen.
+      </p>
+      {extra.error && <div className="alert">{extra.error}</div>}
+      {extra.loading && !extra.data ? (
+        <div className="center-screen" style={{ minHeight: 120 }}>
+          <div className="spinner" />
+        </div>
+      ) : (
+        <>
+          <div className="row" style={{ gap: 8, marginBottom: 8, alignItems: "center" }}>
+            <button className="btn ghost sm" onClick={() => setHidden(new Set())}>
+              Todos
+            </button>
+            <button className="btn ghost sm" onClick={() => setHidden(new Set(rows.map((r) => r.id)))}>
+              Ninguno
+            </button>
+            <span className="caption" style={{ marginLeft: "auto" }}>
+              {selected.length} de {rows.length} seleccionados
+            </span>
+          </div>
+          <div className="emp-picker" style={{ maxHeight: 360 }}>
+            {rows.map((r) => (
+              <label key={r.id} className="check" style={{ justifyContent: "space-between", padding: "4px 0" }}>
+                <span>
+                  <input type="checkbox" checked={!hidden.has(r.id)} onChange={() => toggle(r.id)} /> {r.name}
+                </span>
+                <span className="caption">
+                  {r.lateSeconds ? `Tarde ${fmtHms(r.lateSeconds)}` : "Sin tarde"}
+                  {r.noShow ? ` · ${r.noShow} sin presentarse` : ""}
+                </span>
+              </label>
+            ))}
+            {rows.length === 0 && <div className="empty">No hay empleados en este local.</div>}
+          </div>
+        </>
+      )}
+      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose}>
+          Cancelar
+        </button>
+        <button className="btn" disabled={busy || !selected.length} onClick={download}>
+          {busy ? "Generando…" : "Descargar imagen"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 /** Calendario para elegir la fecha de inicio y la fecha de corte. */
-function CutDatePicker({ initial, onApply, onClose }: { initial: [string, string]; onApply: (r: [string, string]) => void; onClose: () => void }) {
+function CutDatePicker({
+  initial,
+  error: saveError,
+  onApply,
+  onClose,
+}: {
+  initial: [string, string];
+  error: string | null;
+  onApply: (r: [string, string]) => void;
+  onClose: () => void;
+}) {
   const [from, setFrom] = useState(initial[0]);
   const [to, setTo] = useState(initial[1]);
   const days = from && to ? Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) : 0;
@@ -595,7 +842,7 @@ function CutDatePicker({ initial, onApply, onClose }: { initial: [string, string
           if (!error) onApply([from, to]);
         }}
       >
-        <p className="caption">Las marcas y las llegadas tarde de cada persona se calculan desde la fecha de inicio hasta la fecha de corte (incluida).</p>
+        <p className="caption">Las marcas y las llegadas tarde de cada persona se calculan desde la fecha de inicio hasta la fecha de corte (incluida). Queda guardada para todos hasta que se cambie o se quite.</p>
         <div className="row" style={{ gap: 12 }}>
           <label className="field" style={{ flex: 1 }}>
             <span>Fecha de inicio</span>
@@ -607,6 +854,7 @@ function CutDatePicker({ initial, onApply, onClose }: { initial: [string, string
           </label>
         </div>
         {error && from && to && <div className="alert">{error}</div>}
+        {saveError && <div className="alert">{saveError}</div>}
         <div className="modal-foot">
           <button type="button" className="btn ghost" onClick={onClose}>
             Cancelar
@@ -656,6 +904,52 @@ function LateCell({ late, off }: { late?: Lateness; off?: ShiftDayOff }) {
 
 /** Todas las marcas de una persona en un día: RRHH corrige la hora o elimina una marca. */
 function EditDay({ row, onChanged, onDone }: { row: DayRow; onChanged: () => void; onDone: () => void }) {
+  return (
+    <Modal title="Editar marcas" onClose={onDone}>
+      <div className="stack">
+        <p>
+          <b>{row.name ?? `ID ${row.badge} sin empleado`}</b> · {fmtLongDate(row.date)} · huella {row.badge}
+        </p>
+        <p className="caption">Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj.</p>
+        <DayPunchEditor row={row} onChanged={onChanged} />
+      </div>
+      <div className="modal-foot">
+        <button className="btn" onClick={onDone}>
+          Listo
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Edición de las marcas de una persona en todo el periodo (quincena o fecha de corte), día por día. */
+function EditPerson({ person, range, onChanged, onDone }: { person: PersonRow; range: [string, string]; onChanged: () => void; onDone: () => void }) {
+  return (
+    <Modal title="Editar marcación" onClose={onDone} wide>
+      <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
+        <b>{person.name ?? `ID ${person.badge} sin empleado`}</b> · {person.code && `${person.code} · `}Huella {person.badge} · {fmtRange(range)}
+        <br />
+        Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj.
+      </p>
+      <div className="stack">
+        {person.days.map((d) => (
+          <div key={d.key} className="card" style={{ padding: 16 }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>{fmtLongDate(d.date)}</h3>
+            <DayPunchEditor row={d} onChanged={onChanged} />
+          </div>
+        ))}
+      </div>
+      <div className="modal-foot">
+        <button className="btn" onClick={onDone}>
+          Listo
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Marcas de un día con su hora editable: guardar la corrección o eliminar la marca. */
+function DayPunchEditor({ row, onChanged }: { row: DayRow; onChanged: () => void }) {
   const [punches, setPunches] = useState(row.punches);
   const [times, setTimes] = useState<Record<number, string>>(() => Object.fromEntries(row.punches.map((p) => [p.id, fmtTimeSec(p.punched_at)])));
   const [busy, setBusy] = useState<number | null>(null);
@@ -688,46 +982,35 @@ function EditDay({ row, onChanged, onDone }: { row: DayRow; onChanged: () => voi
     });
 
   return (
-    <Modal title="Editar marcas" onClose={onDone}>
-      <div className="stack">
-        <p>
-          <b>{row.name ?? `ID ${row.badge} sin empleado`}</b> · {fmtLongDate(row.date)} · huella {row.badge}
-        </p>
-        <p className="caption">Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj.</p>
-        {punches.length === 0 && <div className="empty">No quedan marcas este día.</div>}
-        {punches.map((p) => {
-          const dirty = times[p.id] !== fmtTimeSec(p.punched_at);
-          return (
-            <div key={p.id} className="row" style={{ alignItems: "center", gap: 8 }}>
-              <input
-                className="input mono"
-                type="time"
-                step={1}
-                style={{ width: 150 }}
-                value={times[p.id]}
-                onChange={(e) => setTimes({ ...times, [p.id]: e.target.value.length === 5 ? `${e.target.value}:00` : e.target.value })}
-              />
-              <span className="caption" style={{ flex: 1 }}>
-                {p.is_double_tap ? "Doble marca" : p.id === firstValid ? "Entrada" : "No cuenta"}
-                {p.original_punched_at && ` · el reloj marcó ${fmtTimeSec(p.original_punched_at)}`}
-              </span>
-              <button className="btn sm" disabled={!dirty || busy !== null} onClick={() => save(p)}>
-                Guardar
-              </button>
-              <button className="btn sm danger" disabled={busy !== null} onClick={() => remove(p)}>
-                Eliminar
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
-      <div className="modal-foot">
-        <button className="btn" onClick={onDone}>
-          Listo
-        </button>
-      </div>
-    </Modal>
+    <div className="stack">
+      {punches.length === 0 && <div className="empty">No quedan marcas este día.</div>}
+      {punches.map((p) => {
+        const dirty = times[p.id] !== fmtTimeSec(p.punched_at);
+        return (
+          <div key={p.id} className="row" style={{ alignItems: "center", gap: 8 }}>
+            <input
+              className="input mono"
+              type="time"
+              step={1}
+              style={{ width: 150 }}
+              value={times[p.id]}
+              onChange={(e) => setTimes({ ...times, [p.id]: e.target.value.length === 5 ? `${e.target.value}:00` : e.target.value })}
+            />
+            <span className="caption" style={{ flex: 1 }}>
+              {p.is_double_tap ? "Doble marca" : p.id === firstValid ? "Entrada" : "No cuenta"}
+              {p.original_punched_at && ` · el reloj marcó ${fmtTimeSec(p.original_punched_at)}`}
+            </span>
+            <button className="btn sm" disabled={!dirty || busy !== null} onClick={() => save(p)}>
+              Guardar
+            </button>
+            <button className="btn sm danger" disabled={busy !== null} onClick={() => remove(p)}>
+              Eliminar
+            </button>
+          </div>
+        );
+      })}
+      {error && <div className="alert">{error}</div>}
+    </div>
   );
 }
 

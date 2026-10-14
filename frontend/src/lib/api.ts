@@ -205,6 +205,12 @@ export interface Punch {
 }
 
 /** Llegada tarde de un día con turno: entrada vs. inicio del turno, acumulada por quincena. */
+/** Fecha de corte de Marcaciones, guardada para todos (de date_from a date_to, incluidos). */
+export interface CutDate {
+  date_from: string;
+  date_to: string;
+}
+
 export interface Lateness {
   employee_id: number;
   date: string;
