@@ -211,6 +211,8 @@ export interface Lateness {
   shift_start: string;
   check_in: string | null;
   late_minutes: number;
+  /** Segundos exactos de llegada tarde. */
+  late_seconds: number;
   /** Minutos tarde acumulados en la quincena hasta ese día. */
   quincena_minutes: number;
   /** Minutos de ese día que ya cuentan (pasados los 15 perdonados por quincena). */

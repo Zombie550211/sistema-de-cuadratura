@@ -448,6 +448,7 @@ class LatenessOut(BaseModel):
     shift_start: datetime
     check_in: datetime | None
     late_minutes: int
+    late_seconds: int
     quincena_minutes: int
     counted_minutes: int
 

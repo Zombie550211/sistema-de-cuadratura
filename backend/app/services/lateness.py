@@ -23,6 +23,8 @@ class DayLateness:
     shift_start: datetime
     check_in: datetime | None
     late_minutes: int
+    # Segundos exactos de llegada tarde (para el total en horas, minutos y segundos).
+    late_seconds: int
     # Minutos tarde acumulados en la quincena hasta este día, incluido.
     quincena_minutes: int
     # De los minutos de este día, cuántos cuentan (ya se pasó de lo que se perdona).
@@ -66,7 +68,8 @@ def lateness(
     used: dict[tuple[int, date], int] = {}
     for shift in sorted(db.scalars(shift_stmt), key=lambda s: (s.employee_id, s.work_date)):
         check_in = first_punch.get((shift.employee_id, shift.work_date))
-        late = max(int((check_in - shift.start_at).total_seconds() // 60), 0) if check_in else 0
+        late_seconds = max(int((check_in - shift.start_at).total_seconds()), 0) if check_in else 0
+        late = late_seconds // 60
         bucket = (shift.employee_id, quincena_start(shift.work_date))
         before = used.get(bucket, 0)
         after = before + late
@@ -79,6 +82,7 @@ def lateness(
                     shift_start=shift.start_at,
                     check_in=check_in,
                     late_minutes=late,
+                    late_seconds=late_seconds,
                     quincena_minutes=after,
                     counted_minutes=max(after - allowance, 0) - max(before - allowance, 0),
                 )

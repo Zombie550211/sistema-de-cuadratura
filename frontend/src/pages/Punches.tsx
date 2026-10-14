@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { IconChevronLeft, IconChevronRight } from "../components/Icons";
+import { IconChevronLeft, IconChevronRight, IconX } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RowMenu, type RowAction } from "../components/RowMenu";
 import {
@@ -17,7 +17,7 @@ import {
   type Punch,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { addDays, fmtLongDate, fmtMinutes, fmtTime, fmtTimeSec, fmtWeek, localDate, today, weekStart } from "../lib/format";
+import { addDays, fmtLongDate, fmtMinutes, fmtRange, fmtTime, fmtHms, fmtTimeSec, localDate, quincena, today } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 interface DayRow {
@@ -35,7 +35,7 @@ interface DayRow {
   ignored: number;
 }
 
-/** Una persona (empleado, o huella del reloj sin empleado) con sus días marcados en la semana. */
+/** Una persona (empleado, o huella del reloj sin empleado) con sus días marcados en el periodo. */
 interface PersonRow {
   key: string;
   badge: string;
@@ -104,21 +104,25 @@ function punchRole(r: DayRow, p: Punch): { cls: string; title: string } {
 }
 
 /** Marcaciones de todos los empleados, con una pestaña por local: una fila por persona y, al
- *  tocarla, una ventana con sus marcas de la semana día por día (la entrada resaltada). */
+ *  tocarla, una ventana con sus marcas de la quincena día por día (la entrada resaltada). */
 export function Punches() {
   const [params, setParams] = useSearchParams();
   const { can } = useAuth();
   const canEdit = can("admin", "rrhh");
-  // Se ve una semana (lunes a domingo) a la vez: la del último archivo subido; las anteriores
-  // quedan ocultas y se recorren con las flechas. Desde Importar llega ?hasta=&local= del archivo.
-  const [week, setWeek] = useState(() => weekStart(params.get("hasta") ?? params.get("desde") ?? today()));
-  const [latestWeek, setLatestWeek] = useState<string | null>(null);
-  const from = week;
-  const to = addDays(week, 6);
+  // Se ve una quincena a la vez (del 1 al 15 o del 16 a fin de mes): la del último archivo subido;
+  // las demás se recorren con las flechas. Desde Importar llega ?hasta=&local= del archivo.
+  const [quin, setQuin] = useState(() => quincena(params.get("hasta") ?? params.get("desde") ?? today()));
+  const [latestQuin, setLatestQuin] = useState<[string, string] | null>(null);
   const [search, setSearch] = useState("");
   const [showDoubles, setShowDoubles] = useState(true);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  // Fecha de corte: si está puesta, en lugar de la quincena se ve de la fecha de inicio hasta el
+  // día de corte (las marcas y las llegadas tarde se calculan solo hasta ese día).
+  const [cut, setCut] = useState<[string, string] | null>(null);
+  const [pickingCut, setPickingCut] = useState(false);
+  const [from, to] = cut ?? quin;
+  const periodDays = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
 
   const locales = useAsync(() => api.get<Locales>("/attendance/locales"), []);
   const tabs = (locales.data?.devices ?? []).filter((d) => d.punches > 0);
@@ -126,16 +130,16 @@ export function Punches() {
   const wanted = Number(params.get("local")) || lastDevice;
   const deviceId = tabs.find((d) => d.id === wanted)?.id ?? tabs[0]?.id ?? null;
 
-  // Sin fecha en la URL, se abre en la semana y el local del último archivo subido.
+  // Sin fecha en la URL, se abre en la quincena y el local del último archivo subido.
   useEffect(() => {
     api
       .get<Page<ImportBatch>>("/attendance/imports", { limit: 1 })
       .then((page) => {
         const last = page.items[0];
         if (!last?.date_to) return;
-        setLatestWeek(weekStart(last.date_to));
+        setLatestQuin(quincena(last.date_to));
         if (params.get("hasta") || params.get("desde")) return;
-        setWeek(weekStart(last.date_to));
+        setQuin(quincena(last.date_to));
         setLastDevice(last.device.id);
       })
       .catch(() => {});
@@ -155,7 +159,7 @@ export function Punches() {
     [from, to, deviceId, showDoubles],
   );
 
-  // Llegadas tarde de la semana de todos los empleados con turno.
+  // Llegadas tarde del periodo de todos los empleados con turno.
   const late = useAsync(() => api.get<Lateness[]>("/attendance/lateness", { date_from: from, date_to: to }), [from, to]);
   const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
 
@@ -164,6 +168,15 @@ export function Punches() {
     next.set("local", String(id));
     setParams(next, { replace: true });
     setOpenKey(null);
+  }
+
+  function openPerson(key: string) {
+    setOpenKey(key);
+  }
+
+  function moveQuin(r: [string, string]) {
+    setCut(null);
+    setQuin(r);
   }
 
   function changed() {
@@ -184,7 +197,11 @@ export function Punches() {
 
   function lateSummary(p: PersonRow) {
     const list = p.employeeId ? p.days.map((d) => lateByKey.get(`${p.employeeId}|${d.date}`)).filter((l) => !!l?.late_minutes) : [];
-    return { days: list.length, counted: list.reduce((sum, l) => sum + (l?.counted_minutes ?? 0), 0) };
+    return {
+      days: list.length,
+      counted: list.reduce((sum, l) => sum + (l?.counted_minutes ?? 0), 0),
+      seconds: list.reduce((sum, l) => sum + (l?.late_seconds ?? 0), 0),
+    };
   }
 
   return (
@@ -193,7 +210,7 @@ export function Punches() {
         <div>
           <span className="caption">Asistencia</span>
           <h1>Marcaciones</h1>
-          <p>Toque a una persona para ver sus marcas de la semana. Hora de El Salvador. Solo cuenta la primera marca del día (la entrada); las tachadas son dobles marcas.</p>
+          <p>Toque a una persona para ver sus marcas de la quincena. Hora de El Salvador. Solo cuenta la primera marca del día (la entrada); las tachadas son dobles marcas.</p>
         </div>
       </div>
 
@@ -217,15 +234,15 @@ export function Punches() {
 
       <div className="card row">
         <div className="row" style={{ gap: 4, alignSelf: "flex-end" }}>
-          <button className="icon-btn" onClick={() => setWeek(addDays(week, -7))} aria-label="Semana anterior">
+          <button className="icon-btn" onClick={() => moveQuin(quincena(addDays(quin[0], -1)))} aria-label="Quincena anterior">
             <IconChevronLeft width={20} height={20} />
           </button>
-          <span className="sch-week">{fmtWeek(week)}</span>
-          <button className="icon-btn" onClick={() => setWeek(addDays(week, 7))} aria-label="Semana siguiente">
+          <span className="sch-week">{cut ? `Corte: ${fmtRange(cut)}` : fmtRange(quin)}</span>
+          <button className="icon-btn" onClick={() => moveQuin(quincena(addDays(quin[1], 1)))} aria-label="Quincena siguiente">
             <IconChevronRight width={20} height={20} />
           </button>
-          {latestWeek && latestWeek !== week && (
-            <button className="btn ghost sm" onClick={() => setWeek(latestWeek)}>
+          {latestQuin && (cut || latestQuin[0] !== quin[0]) && (
+            <button className="btn ghost sm" onClick={() => moveQuin(latestQuin)}>
               Último archivo
             </button>
           )}
@@ -238,12 +255,22 @@ export function Punches() {
           <label className="check">
             <input type="checkbox" checked={showDoubles} onChange={(e) => setShowDoubles(e.target.checked)} /> Mostrar dobles marcas
           </label>
+          <div className="row" style={{ gap: 4 }}>
+            <button className={`btn sm${cut ? "" : " ghost"}`} onClick={() => setPickingCut(true)} title="Calcular desde una fecha de inicio hasta la fecha de corte">
+              {cut ? `Corte: ${fmtRange(cut)}` : "Fecha de corte"}
+            </button>
+            {cut && (
+              <button className="icon-btn" onClick={() => setCut(null)} aria-label="Quitar fecha de corte" title="Quitar fecha de corte">
+                <IconX width={16} height={16} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {error && <div className="alert">{error}</div>}
       {data && data.total > data.items.length && (
-        <div className="alert info">Mostrando {data.items.length} de {data.total} marcas de la semana.</div>
+        <div className="alert info">Mostrando {data.items.length} de {data.total} marcas del periodo.</div>
       )}
 
       {loading && !data ? (
@@ -251,7 +278,7 @@ export function Punches() {
           <div className="spinner" />
         </div>
       ) : shown.length === 0 ? (
-        <div className="card empty">{tabs.length ? (search ? "Nadie coincide con la búsqueda." : "No hay marcaciones en esta semana.") : "Aún no hay marcaciones."}</div>
+        <div className="card empty">{tabs.length ? (search ? "Nadie coincide con la búsqueda." : "No hay marcaciones en este periodo.") : "Aún no hay marcaciones."}</div>
       ) : (
         <div className="card">
           <div className="card-head">
@@ -277,8 +304,8 @@ export function Punches() {
                       key={p.key}
                       className="clickable"
                       tabIndex={0}
-                      onClick={() => setOpenKey(p.key)}
-                      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpenKey(p.key))}
+                      onClick={() => openPerson(p.key)}
+                      onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), openPerson(p.key))}
                     >
                       <td>
                         {p.name ? (
@@ -295,7 +322,7 @@ export function Punches() {
                           {p.badge}
                         </span>
                       </td>
-                      <td>{p.days.length} de 7</td>
+                      <td>{p.days.length} de {periodDays}</td>
                       <td className="nowrap">
                         {ls.days === 0 ? (
                           <span className="muted">—</span>
@@ -304,6 +331,7 @@ export function Punches() {
                             <span className={`badge${ls.counted ? " danger" : ""}`}>
                               {ls.days} día{ls.days === 1 ? "" : "s"}
                             </span>
+                            <div className="caption" title="Total de llegada tarde en el periodo">Total: {fmtHms(ls.seconds)}</div>
                             {ls.counted > 0 && <div className="caption">{fmtMinutes(ls.counted)} cuentan como tarde</div>}
                           </>
                         )}
@@ -321,12 +349,24 @@ export function Punches() {
       )}
 
       {open && !dialog && (
-        <PersonHistory
+        <PersonQuincena
           person={open}
+          range={[from, to]}
+          isCut={!!cut}
           showDoubles={showDoubles}
           canEdit={canEdit}
           onAction={setDialog}
           onClose={() => setOpenKey(null)}
+        />
+      )}
+      {pickingCut && (
+        <CutDatePicker
+          initial={cut ?? [quincena(today())[0], today()]}
+          onApply={(r) => {
+            setCut(r);
+            setPickingCut(false);
+          }}
+          onClose={() => setPickingCut(false)}
         />
       )}
       {dialog?.kind === "edit" && <EditDay row={dialog.row} onChanged={reload} onDone={changed} />}
@@ -336,55 +376,55 @@ export function Punches() {
   );
 }
 
-/** Desde aquí se pide el historial completo de una persona (el backend no limita el rango si
- *  se filtra por empleado o huella). */
-const HISTORY_FROM = "2000-01-01";
-
-/** Ventana con todo el historial de una persona en el local: cada semana con marcas, sus 7 días,
- *  las marcas y la llegada tarde de cada uno. La semana más reciente va primero. */
-function PersonHistory({
+/** Ventana con el periodo de una persona (la quincena o, si hay, la fecha de corte): cada día,
+ *  sus marcas, la llegada tarde y el total tarde en horas, minutos y segundos. */
+function PersonQuincena({
   person,
+  range,
+  isCut,
   showDoubles,
   canEdit,
   onAction,
   onClose,
 }: {
   person: PersonRow;
+  range: [string, string];
+  /** El rango es la fecha de corte elegida, no una quincena. */
+  isCut: boolean;
   showDoubles: boolean;
   canEdit: boolean;
   onAction: (d: Dialog) => void;
   onClose: () => void;
 }) {
+  const [from, to] = range;
   const deviceId = person.days[0].deviceId;
-  const to = today();
-  const history = useAsync(
+  const punches = useAsync(
     () =>
       api.get<Page<Punch>>("/attendance/punches", {
-        date_from: HISTORY_FROM,
+        date_from: from,
         date_to: to,
         device_id: deviceId,
         ...(person.employeeId ? { employee_id: person.employeeId } : { badge: person.badge }),
         include_double_taps: showDoubles,
         limit: 10000,
       }),
-    [person.key, deviceId, showDoubles],
+    [person.key, deviceId, showDoubles, from, to],
   );
   const late = useAsync(
     () =>
       person.employeeId
-        ? api.get<Lateness[]>("/attendance/lateness", { date_from: HISTORY_FROM, date_to: to, employee_id: person.employeeId })
+        ? api.get<Lateness[]>("/attendance/lateness", { date_from: from, date_to: to, employee_id: person.employeeId })
         : Promise.resolve([]),
-    [person.employeeId],
+    [person.employeeId, from, to],
   );
   const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
+  const lateTotal = (late.data ?? []).filter((l) => l.late_minutes > 0).reduce((sum, l) => sum + l.late_seconds, 0);
 
   // Sin empleado, una huella puede tener marcas de alguien vinculado antes: solo las de esta persona.
-  const days = useMemo(
-    () => groupPeople(history.data?.items ?? []).find((p) => p.key === person.key)?.days ?? person.days,
-    [history.data, person],
-  );
+  const days = useMemo(() => groupPeople(punches.data?.items ?? []).find((p) => p.key === person.key)?.days ?? [], [punches.data, person.key]);
   const byDate = new Map(days.map((d) => [d.date, d]));
-  const weeks = [...new Set(days.map((d) => weekStart(d.date)))].sort().reverse();
+  const dates: string[] = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) dates.push(d);
 
   function actions(r: DayRow): RowAction[] {
     const list: RowAction[] = [{ label: "Editar marcas", onClick: () => onAction({ kind: "edit", row: r }) }];
@@ -396,10 +436,14 @@ function PersonHistory({
   return (
     <Modal title={person.name ?? `ID ${person.badge} sin empleado`} onClose={onClose} wide>
       <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
-        {person.code && `${person.code} · `}Huella {person.badge} · {days.length} día{days.length === 1 ? "" : "s"} con marcas
-        {history.loading && " · cargando historial…"}
+        {person.code && `${person.code} · `}Huella {person.badge} · {days.length} día{days.length === 1 ? "" : "s"} con marcas {isCut ? "hasta la fecha de corte" : "en la quincena"}
       </p>
-      {history.error && <div className="alert" style={{ marginBottom: 16 }}>{history.error}</div>}
+      <div className="row" style={{ gap: 12, marginBottom: 16, alignItems: "center" }}>
+        <span className="sch-week">{isCut ? `Corte: ${fmtRange(range)}` : fmtRange(range)}</span>
+        {lateTotal > 0 && <span className="badge danger" title="Total de llegada tarde en el periodo">Tarde en total: {fmtHms(lateTotal)}</span>}
+        {(punches.loading || late.loading) && <div className="spinner" style={{ width: 16, height: 16 }} />}
+      </div>
+      {punches.error && <div className="alert" style={{ marginBottom: 16 }}>{punches.error}</div>}
       {!person.name && canEdit && (
         <div className="alert info" style={{ marginBottom: 16 }}>
           Esta huella no tiene empleado.{" "}
@@ -418,12 +462,8 @@ function PersonHistory({
               {canEdit && <th className="row-actions" />}
             </tr>
           </thead>
-          {weeks.map((week) => (
-          <tbody key={week}>
-            <tr className="week-head">
-              <td colSpan={2 + Number(!!person.employeeId) + Number(canEdit)}>{fmtWeek(week)}</td>
-            </tr>
-            {Array.from({ length: 7 }, (_, i) => addDays(week, i)).map((date) => {
+          <tbody>
+            {dates.map((date) => {
               const r = byDate.get(date);
               return (
                 <tr key={date}>
@@ -458,7 +498,6 @@ function PersonHistory({
               );
             })}
           </tbody>
-          ))}
         </table>
       </div>
       <div className="modal-foot">
@@ -466,6 +505,47 @@ function PersonHistory({
           Cerrar
         </button>
       </div>
+    </Modal>
+  );
+}
+
+/** Calendario para elegir la fecha de inicio y la fecha de corte. */
+function CutDatePicker({ initial, onApply, onClose }: { initial: [string, string]; onApply: (r: [string, string]) => void; onClose: () => void }) {
+  const [from, setFrom] = useState(initial[0]);
+  const [to, setTo] = useState(initial[1]);
+  const days = from && to ? Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) : 0;
+  const error = !from || !to ? "Elija las dos fechas." : to < from ? "La fecha de corte no puede ser antes de la de inicio." : days > 93 ? "El rango no puede pasar de 3 meses." : null;
+
+  return (
+    <Modal title="Fecha de corte" onClose={onClose}>
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!error) onApply([from, to]);
+        }}
+      >
+        <p className="caption">Las marcas y las llegadas tarde de cada persona se calculan desde la fecha de inicio hasta la fecha de corte (incluida).</p>
+        <div className="row" style={{ gap: 12 }}>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Fecha de inicio</span>
+            <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Fecha de corte</span>
+            <input className="input" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
+          </label>
+        </div>
+        {error && from && to && <div className="alert">{error}</div>}
+        <div className="modal-foot">
+          <button type="button" className="btn ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="btn" disabled={!!error}>
+            Aplicar
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }
@@ -485,7 +565,7 @@ function LateCell({ late }: { late?: Lateness }) {
   const counted = late.counted_minutes > 0;
   return (
     <td className="nowrap" title={`${turno}. Acumulado en la quincena: ${fmtMinutes(late.quincena_minutes)} (se perdonan ${LATE_ALLOWANCE}min).`}>
-      <span className={`badge${counted ? " danger" : ""}`}>{fmtMinutes(late.late_minutes)}</span>
+      <span className={`badge${counted ? " danger" : ""}`}>{fmtHms(late.late_seconds)}</span>
       <div className="caption">
         {counted
           ? `${fmtMinutes(late.counted_minutes)} cuentan como tarde`

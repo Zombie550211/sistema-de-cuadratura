@@ -61,10 +61,35 @@ export function fmtMinutes(total: number): string {
   return m ? `${h}h ${m}min` : `${h}h`;
 }
 
+/** Segundos como "1h 05m 12s", "12m 03s" o "45s". */
+export function fmtHms(total: number): string {
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (h) return `${h}h ${pad(m)}m ${pad(sec)}s`;
+  if (m) return `${m}m ${pad(sec)}s`;
+  return `${sec}s`;
+}
+
 /** Lunes de la semana que contiene la fecha. */
 export function weekStart(ymd: string): string {
   const dow = new Date(`${ymd}T00:00:00Z`).getUTCDay();
   return addDays(ymd, dow === 0 ? -6 : 1 - dow);
+}
+
+/** Quincena que contiene la fecha: del 1 al 15 o del 16 a fin de mes, como [desde, hasta]. */
+export function quincena(ymd: string): [string, string] {
+  const month = ymd.slice(0, 8);
+  if (Number(ymd.slice(8)) <= 15) return [`${month}01`, `${month}15`];
+  return [`${month}16`, addDays(`${addDays(`${month}28`, 4).slice(0, 8)}01`, -1)];
+}
+
+/** Rango de fechas como "1 – 15 oct 2026" o, si cambia de mes, "25 sept – 12 oct 2026". */
+export function fmtRange([from, to]: [string, string]): string {
+  const short = (ymd: string) => shortMonthFmt.format(new Date(`${ymd}T00:00:00Z`)).replace(".", "");
+  const start = from.slice(0, 7) === to.slice(0, 7) ? String(Number(from.slice(8))) : short(from);
+  return `${start} – ${short(to)} ${to.slice(0, 4)}`;
 }
 
 /** AAAA-MM-DD → dd/mm/aaaa, como se escriben las fechas en RRHH. */

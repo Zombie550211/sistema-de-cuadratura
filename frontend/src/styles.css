@@ -266,8 +266,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .table .section-row td, .table .team-row td { padding: 0; }
 .table .section-row:hover, .table .team-row:hover { background: none; }
 .table .team-row td { background: var(--bg); }
-.table .week-head td { background: var(--bg); padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--muted); }
-.table .week-head:hover { background: none; }
 .section-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface-2); color: var(--text); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
 .team-head-in { position: sticky; left: 0; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 12px; box-shadow: inset 4px 0 0 var(--accent); max-width: 100%; }
 .team-toggle { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--muted); cursor: pointer; }
