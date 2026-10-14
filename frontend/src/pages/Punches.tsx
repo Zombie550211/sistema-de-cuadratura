@@ -439,6 +439,9 @@ function PersonQuincena({
   const shiftByDate = new Map((schedule.data?.[0] ?? []).map((a) => [a.work_date, a]));
   const offByDate = new Map((schedule.data?.[1] ?? []).filter((d) => d.employee_id === person.employeeId).map((d) => [d.work_date, d]));
   const hasSchedule = !!person.employeeId && !!schedule.data;
+  // Intercambios de fin de semana: día trabajado → día del turno, y al revés.
+  const swapFrom = new Map((late.data ?? []).filter((l) => l.swapped_from).map((l) => [l.date, l.swapped_from!]));
+  const swapTo = new Map([...swapFrom].map(([worked, planned]) => [planned, worked]));
 
   // Sin empleado, una huella puede tener marcas de alguien vinculado antes: solo las de esta persona.
   const days = useMemo(() => groupPeople(punches.data?.items ?? []).find((p) => p.key === person.key)?.days ?? [], [punches.data, person.key]);
@@ -448,7 +451,7 @@ function PersonQuincena({
 
   /** Comparación del día con el horario: faltó a un turno o marcó en su día de descanso. */
   function check(date: string): "falta" | "descanso" | null {
-    if (!hasSchedule) return null;
+    if (!hasSchedule || swapFrom.has(date) || swapTo.has(date)) return null;
     const off = offByDate.get(date);
     if (byDate.has(date)) return off && !isNoShow(off) ? "descanso" : null;
     return shiftByDate.has(date) && date < today() ? "falta" : null;
@@ -498,8 +501,10 @@ function PersonQuincena({
           <tbody>
             {dates.map((date) => {
               const r = byDate.get(date);
-              const shift = shiftByDate.get(date);
-              const off = offByDate.get(date);
+              const planned = swapFrom.get(date);
+              const shift = shiftByDate.get(planned ?? date);
+              const off = planned ? undefined : offByDate.get(date);
+              const movedTo = swapTo.get(date);
               const flag = check(date);
               return (
                 <tr key={date}>
@@ -507,9 +512,13 @@ function PersonQuincena({
                   {person.employeeId && (
                     <td className="nowrap">
                       {shift ? (
-                        <span title={shift.source === "crm" ? "Turno del CRM" : "Turno asignado aquí"}>
-                          {fmtTime(shift.start_at)} – {fmtTime(shift.end_at)}
-                        </span>
+                        <>
+                          <span className={movedTo ? "muted" : undefined} title={shift.source === "crm" ? "Turno del CRM" : "Turno asignado aquí"}>
+                            {fmtTime(shift.start_at)} – {fmtTime(shift.end_at)}
+                          </span>
+                          {planned && <div className="caption">Cambio: turno del {fmtLongDate(planned).toLowerCase()}</div>}
+                          {movedTo && <div className="caption">Lo trabajó el {fmtLongDate(movedTo).toLowerCase()}</div>}
+                        </>
                       ) : off ? (
                         <span title={off.notes ?? undefined}>
                           <span className="swatch" style={{ background: dayOffColor(off), borderRadius: 4, marginRight: 6 }} />
@@ -549,7 +558,7 @@ function PersonQuincena({
                         Sin marcas · faltó
                       </span>
                     ) : (
-                      <span className="muted">{off ? "Sin marcas (descanso)" : "Sin marcas"}</span>
+                      <span className="muted">{movedTo ? "Sin marcas (cambió de día)" : off ? "Sin marcas (descanso)" : "Sin marcas"}</span>
                     )}
                   </td>
                   {person.employeeId &&

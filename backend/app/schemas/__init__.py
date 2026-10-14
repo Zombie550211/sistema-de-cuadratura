@@ -451,6 +451,7 @@ class LatenessOut(BaseModel):
     late_seconds: int
     quincena_minutes: int
     counted_minutes: int
+    swapped_from: date | None = None
 
 
 class ExcelTextOut(BaseModel):

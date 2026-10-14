@@ -217,6 +217,8 @@ export interface Lateness {
   quincena_minutes: number;
   /** Minutos de ese día que ya cuentan (pasados los 15 perdonados por quincena). */
   counted_minutes: number;
+  /** Intercambio de fin de semana: fecha del turno que trabajó este día (vino sábado en vez de domingo o al revés). */
+  swapped_from: string | null;
 }
 
 /** Minutos de llegada tarde que se perdonan por quincena. */
