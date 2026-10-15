@@ -575,8 +575,11 @@ function PersonQuincena({
 
   /** Comparación del día con el horario: faltó a un turno o marcó en su día de descanso. */
   function check(date: string): "falta" | "descanso" | null {
-    if (!hasSchedule || swapFrom.has(date) || swapTo.has(date)) return null;
+    if (!hasSchedule) return null;
     const off = offByDate.get(date);
+    // «No se presentó» en Horarios es falta, aunque el día no tenga turno.
+    if (off && isNoShow(off) && !byDate.has(date)) return "falta";
+    if (swapFrom.has(date) || swapTo.has(date)) return null;
     if (byDate.has(date)) return off && !isNoShow(off) ? "descanso" : null;
     return shiftByDate.has(date) && date < today() ? "falta" : null;
   }
@@ -697,6 +700,10 @@ function PersonQuincena({
                           </span>
                         )}
                       </>
+                    ) : flag === "falta" && off && isNoShow(off) ? (
+                      <span className="badge danger" title="Marcado «No se presentó» en Horarios: cuenta como falta">
+                        No se presentó
+                      </span>
                     ) : flag === "falta" ? (
                       <span className="badge danger" title="Tenía turno y no hay marcas">
                         Sin marcas · faltó
