@@ -103,6 +103,7 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
   const inYear = (h: Holiday) => h.day.startsWith(String(year));
   const [editingHolidays, setEditingHolidays] = useState(false);
   const [periodsOf, setPeriodsOf] = useState<Employee | null>(null);
+  const [vacationFor, setVacationFor] = useState<{ employee: Employee; period: VacationPeriod | null } | null>(null);
 
   const byEmployee = useMemo(() => {
     const map = new Map<number, ShiftDayOff[]>();
@@ -179,7 +180,7 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
                 const mine = byEmployee.get(e.id) ?? [];
                 const v = vacationOf.get(e.id);
                 const firstPending = v?.periods.find((p) => p.pending > 0) ?? null;
-                const suggested = v?.next_date ? vacationRange(e.id, firstPending, v.next_date) : null;
+                const suggested = isVacation && v?.next_date;
                 const c = compOf.get(e.id);
                 return (
                   <tr key={e.id}>
@@ -235,8 +236,8 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
                           label={`Acciones de ${e.full_name}`}
                           actions={[
                             ...(isVacation && v?.periods.length ? [{ label: "Períodos: días descansados y trabajados", onClick: () => setPeriodsOf(e) }] : []),
-                            ...(suggested
-                              ? [{ label: `Asignar vacaciones (${fmtDate(suggested.from!)} – ${fmtDate(suggested.to!)})`, onClick: () => setAssigning(suggested) }]
+                            ...(isVacation && v?.next_date
+                              ? [{ label: "Asignar vacaciones: descansadas o trabajadas", onClick: () => setVacationFor({ employee: e, period: firstPending }) }]
                               : []),
                             { label: suggested ? "Asignar otras fechas" : `Asignar ${noun}`, onClick: () => setAssigning({ ids: [e.id] }) },
                             { label: "Ver ficha", onClick: () => navigate(`/empleados/${e.id}`) },
@@ -274,10 +275,22 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
           canEdit={canEdit}
           onAssign={(p) => {
             setPeriodsOf(null);
-            setAssigning(vacationRange(periodsOf.id, p, vacationOf.get(periodsOf.id)!.next_date!));
+            setVacationFor({ employee: periodsOf, period: p });
           }}
           onClose={() => setPeriodsOf(null)}
           onChanged={() => vacations.reload()}
+        />
+      )}
+      {vacationFor && vacationOf.get(vacationFor.employee.id) && (
+        <AssignVacationModal
+          employee={vacationFor.employee}
+          v={vacationOf.get(vacationFor.employee.id)!}
+          initialPeriod={vacationFor.period}
+          onClose={() => setVacationFor(null)}
+          onDone={() => {
+            setVacationFor(null);
+            done();
+          }}
         />
       )}
       {editingHolidays && <HolidaysModal year={year} canEdit={canEdit} onClose={() => setEditingHolidays(false)} onChanged={() => comp.reload()} />}
@@ -576,6 +589,141 @@ function VacationPeriodsModal({
           Listo
         </button>
       </div>
+    </Modal>
+  );
+}
+
+const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+
+/** Asigna vacaciones de un período con fechas que RRHH puede cambiar (vienen sugeridas) y decide
+ *  si el empleado las descansó (días de vacación en el calendario) o las trabajó (se suman a los
+ *  días trabajados del período, con las fechas en la nota). */
+function AssignVacationModal({
+  employee,
+  v,
+  initialPeriod,
+  onClose,
+  onDone,
+}: {
+  employee: Employee;
+  v: VacationStatus;
+  initialPeriod: VacationPeriod | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const owing = v.periods.filter((p) => !p.settled && p.pending > 0);
+  const [start, setStart] = useState(initialPeriod?.start ?? "");
+  const period = owing.find((p) => p.start === start) ?? null;
+  const suggested = vacationRange(employee.id, period, v.next_date!);
+  const [from, setFrom] = useState(suggested.from!);
+  const [to, setTo] = useState(suggested.to!);
+  const [worked, setWorked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const count = from && to && to >= from ? daysBetween(from, to) : 0;
+  const tooMany = worked && period !== null && count > period.pending;
+
+  function pickPeriod(value: string) {
+    setStart(value);
+    const p = owing.find((x) => x.start === value) ?? null;
+    const r = vacationRange(employee.id, p, v.next_date!);
+    setFrom(r.from!);
+    setTo(r.to!);
+    if (!p) setWorked(false);
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      if (worked && period) {
+        const range = from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`;
+        const note = `Trabajó ${range} (${count} día${count === 1 ? "" : "s"})`;
+        await api.put(`/schedules/vacations/${employee.id}/periods/${period.start}`, {
+          worked_days: period.worked + count,
+          settled: false,
+          notes: (period.notes ? `${period.notes}; ${note}` : note).slice(0, 500),
+        });
+      } else {
+        await api.post("/schedules/days-off/bulk", {
+          employee_ids: [employee.id],
+          date_from: from,
+          date_to: to,
+          weekdays: [0, 1, 2, 3, 4, 5, 6],
+          kind: "vacacion",
+          notes: period ? `Vacaciones ${periodLabel(period)}` : null,
+        });
+      }
+      onDone();
+    } catch (err) {
+      setError((err as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Vacaciones de ${employee.full_name}`} onClose={onClose}>
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <label className="field">
+          <span>Período</span>
+          <select className="input" value={start} onChange={(e) => pickPeriod(e.target.value)}>
+            {owing.map((p) => (
+              <option key={p.start} value={p.start}>
+                {periodLabel(p)} · {p.pending} pendiente{p.pending === 1 ? "" : "s"}
+              </option>
+            ))}
+            <option value="">Próximo período (desde {fmtDate(v.next_date!)})</option>
+          </select>
+        </label>
+        <div className="chips" role="radiogroup" aria-label="Qué pasó con las vacaciones">
+          <button type="button" role="radio" aria-checked={!worked} className={`btn sm${worked ? " ghost" : ""}`} onClick={() => setWorked(false)}>
+            Las descansó
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={worked}
+            className={`btn sm${worked ? "" : " ghost"}`}
+            disabled={!period}
+            title={period ? undefined : "Solo se pueden trabajar días de un período que ya le tocó"}
+            onClick={() => setWorked(true)}
+          >
+            Las trabajó
+          </button>
+        </div>
+        <div className="caption">
+          {worked
+            ? "Los días se suman a los trabajados del período (se pagan en lugar de descansarse); el horario no cambia."
+            : "Los días quedan como vacación en el calendario: se quita el turno que hubiera y quedan como descanso también en el CRM."}
+        </div>
+        <div className="form-grid">
+          <label className="field">
+            <span>Desde</span>
+            <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} required />
+          </label>
+          <label className="field">
+            <span>Hasta</span>
+            <input className="input" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} required />
+          </label>
+        </div>
+        <div className="caption">
+          {count} día{count === 1 ? "" : "s"}
+          {period && ` · el período tiene ${period.pending} pendiente${period.pending === 1 ? "" : "s"}`}
+        </div>
+        {tooMany && <div className="alert warn">No puede anotar más días trabajados que los pendientes del período ({period!.pending}).</div>}
+        {error && <div className="alert">{error}</div>}
+        <div className="modal-foot">
+          <button type="button" className="btn ghost" onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="btn" disabled={busy || !count || tooMany}>
+            {worked ? "Anotar como trabajadas" : "Asignar descanso"}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }
