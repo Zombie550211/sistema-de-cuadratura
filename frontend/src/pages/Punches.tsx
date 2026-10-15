@@ -7,7 +7,6 @@ import { RowMenu, type RowAction } from "../components/RowMenu";
 import {
   api,
   type CutDate,
-  type DayOffKind,
   type Device,
   ApiError,
   DAY_OFF_LABEL,
@@ -179,21 +178,6 @@ export function Punches() {
   // Días del horario del periodo (incapacidad, compensatorio, «No se presentó») de todos.
   const daysOff = useAsync(() => api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: from, date_to: to }), [from, to]);
 
-  /** Días de incapacidad, de compensatorio y en que no se presentó, de una persona en el periodo. */
-  function dayKinds(employeeId: number | null) {
-    const none = { incapacidad: [], noShow: [], compensatorio: [] } as Record<"incapacidad" | "noShow" | "compensatorio", string[]>;
-    if (!employeeId) return none;
-    const mine = (daysOff.data ?? []).filter((d) => d.employee_id === employeeId);
-    const past = today();
-    // No se presentó: marcado así en Horarios, o tenía turno (ya pasado) y no hay marcas.
-    const missed = (late.data ?? []).filter((l) => l.employee_id === employeeId && !l.check_in && l.date < past).map((l) => l.date);
-    return {
-      incapacidad: mine.filter((d) => d.kind === "incapacidad" && !isNoShow(d)).map((d) => d.work_date).sort(),
-      noShow: [...new Set([...mine.filter(isNoShow).map((d) => d.work_date), ...missed])].sort(),
-      compensatorio: mine.filter((d) => d.kind === "compensatorio" && !isNoShow(d)).map((d) => d.work_date).sort(),
-    };
-  }
-
   function selectTab(id: number) {
     const next = new URLSearchParams(params);
     next.set("local", String(id));
@@ -242,19 +226,6 @@ export function Punches() {
   const open = people.find((p) => p.key === openKey) ?? null;
   const editing = people.find((p) => p.key === editingKey) ?? null;
 
-  function lateSummary(p: PersonRow) {
-    const list = p.employeeId ? p.days.map((d) => lateByKey.get(`${p.employeeId}|${d.date}`)).filter((l) => !!l?.late_minutes) : [];
-    return {
-      days: list.length,
-      counted: list.reduce((sum, l) => sum + (l?.counted_minutes ?? 0), 0),
-      seconds: list.reduce((sum, l) => sum + (l?.late_seconds ?? 0), 0),
-    };
-  }
-
-  function nightSummary(p: PersonRow) {
-    const list = p.employeeId ? p.days.map((d) => lateByKey.get(`${p.employeeId}|${d.date}`)).filter((l) => !!l?.night_seconds) : [];
-    return { days: list.length, seconds: list.reduce((sum, l) => sum + (l?.night_seconds ?? 0), 0) };
-  }
 
   return (
     <div className="page">
@@ -372,9 +343,9 @@ export function Punches() {
               </thead>
               <tbody>
                 {shown.map((p) => {
-                  const ls = lateSummary(p);
-                  const ns = nightSummary(p);
-                  const dk = dayKinds(p.employeeId);
+                  const ls = lateSummary(p, lateByKey);
+                  const ns = nightSummary(p, lateByKey);
+                  const dk = dayKinds(p.employeeId, daysOff.data ?? [], late.data ?? []);
                   return (
                     <tr
                       key={p.key}
@@ -478,6 +449,37 @@ export function Punches() {
       {dialog?.kind === "delete" && <DeleteDay row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
     </div>
   );
+}
+
+/** Llegadas tarde de una persona en los días que marcó. */
+function lateSummary(p: PersonRow, lateByKey: Map<string, Lateness>) {
+  const list = p.employeeId ? p.days.map((d) => lateByKey.get(`${p.employeeId}|${d.date}`)).filter((l) => !!l?.late_minutes) : [];
+  return {
+    days: list.length,
+    counted: list.reduce((sum, l) => sum + (l?.counted_minutes ?? 0), 0),
+    seconds: list.reduce((sum, l) => sum + (l?.late_seconds ?? 0), 0),
+  };
+}
+
+/** Nocturnidad de una persona: días y segundos después de las 19:00. */
+function nightSummary(p: PersonRow, lateByKey: Map<string, Lateness>) {
+  const list = p.employeeId ? p.days.map((d) => lateByKey.get(`${p.employeeId}|${d.date}`)).filter((l) => !!l?.night_seconds) : [];
+  return { days: list.length, seconds: list.reduce((sum, l) => sum + (l?.night_seconds ?? 0), 0) };
+}
+
+/** Días de incapacidad, de compensatorio y en que no se presentó, de una persona en el periodo. */
+function dayKinds(employeeId: number | null, daysOff: ShiftDayOff[], lateness: Lateness[]) {
+  const none = { incapacidad: [], noShow: [], compensatorio: [] } as Record<"incapacidad" | "noShow" | "compensatorio", string[]>;
+  if (!employeeId) return none;
+  const mine = daysOff.filter((d) => d.employee_id === employeeId);
+  const past = today();
+  // No se presentó: marcado así en Horarios, o tenía turno (ya pasado) y no hay marcas.
+  const missed = lateness.filter((l) => l.employee_id === employeeId && !l.check_in && l.date < past).map((l) => l.date);
+  return {
+    incapacidad: mine.filter((d) => d.kind === "incapacidad" && !isNoShow(d)).map((d) => d.work_date).sort(),
+    noShow: [...new Set([...mine.filter(isNoShow).map((d) => d.work_date), ...missed])].sort(),
+    compensatorio: mine.filter((d) => d.kind === "compensatorio" && !isNoShow(d)).map((d) => d.work_date).sort(),
+  };
 }
 
 /** Día corto, p. ej. «Lun 3». */
@@ -743,26 +745,19 @@ function PersonQuincena({
   );
 }
 
-/** Tipos de día que van como columna en la imagen (si alguien los tiene en el periodo). */
-const IMAGE_KINDS: [DayOffKind, string][] = [
-  ["vacacion", "Vacación"],
-  ["incapacidad", "Incapacidad"],
-  ["compensatorio", "Compensatorio"],
-  ["suspendido", "Suspendido"],
-  ["baja", "De baja"],
-];
-
 interface ImageRow {
   id: number;
   name: string;
   code: string;
+  /** La persona como en la tabla (sin días si no marcó en el periodo). */
+  person: PersonRow;
   lateSeconds: number;
   noShow: number;
-  kinds: Partial<Record<DayOffKind, number>>;
 }
 
-/** Imagen de la tabla del local: RRHH quita a quien no quiere mostrar y la descarga en PNG. Van los
- *  empleados que marcaron en este local en el periodo y los activos que tienen huella de este local. */
+/** Imagen de la tabla del local, igual a la de la pantalla: RRHH quita a quien no quiere mostrar,
+ *  revisa la vista previa y la descarga en PNG. Van los empleados que marcaron en este local en el
+ *  periodo y los activos que tienen huella de este local. */
 function DownloadImage({
   device,
   range,
@@ -778,6 +773,8 @@ function DownloadImage({
 }) {
   const [from, to] = range;
   const local = localName(device);
+  const periodDays = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+  const lateByKey = useMemo(() => new Map(lateness.map((l) => [`${l.employee_id}|${l.date}`, l])), [lateness]);
   const extra = useAsync(async () => {
     const employees: Employee[] = [];
     for (let offset = 0; ; offset += 500) {
@@ -791,29 +788,25 @@ function DownloadImage({
 
   const rows = useMemo<ImageRow[]>(() => {
     if (!extra.data) return [];
-    const found = new Map<number, { name: string; code: string }>();
-    for (const p of people) if (p.employeeId) found.set(p.employeeId, { name: p.name ?? "", code: p.code ?? "" });
+    const found = new Map<number, PersonRow>();
+    for (const p of people) if (p.employeeId) found.set(p.employeeId, p);
     for (const e of extra.data.employees) {
-      if (device.fingerprint_key && e.fingerprints?.[device.fingerprint_key]) found.set(e.id, { name: e.full_name, code: e.code });
+      const badge = device.fingerprint_key ? e.fingerprints?.[device.fingerprint_key] : undefined;
+      if (badge && !found.has(e.id)) {
+        found.set(e.id, { key: `e${e.id}`, badge: String(badge), employeeId: e.id, name: e.full_name, code: e.code, days: [] });
+      }
     }
-    const past = today();
     return [...found]
-      .map(([id, info]) => {
-        const late = lateness.filter((l) => l.employee_id === id);
-        const off = extra.data!.daysOff.filter((d) => d.employee_id === id);
-        const kinds: ImageRow["kinds"] = {};
-        for (const d of off) if (!isNoShow(d)) kinds[d.kind] = (kinds[d.kind] ?? 0) + 1;
-        return {
-          id,
-          ...info,
-          lateSeconds: late.filter((l) => l.late_minutes > 0).reduce((sum, l) => sum + l.late_seconds, 0),
-          // Días con turno sin marcas (ya pasados) y días marcados como «No se presentó».
-          noShow: late.filter((l) => !l.check_in && l.date < past).length + off.filter(isNoShow).length,
-          kinds,
-        };
-      })
+      .map(([id, person]) => ({
+        id,
+        name: person.name ?? "",
+        code: person.code ?? "",
+        person,
+        lateSeconds: lateSummary(person, lateByKey).seconds,
+        noShow: dayKinds(id, extra.data!.daysOff, lateness).noShow.length,
+      }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [extra.data, people, lateness, device.fingerprint_key]);
+  }, [extra.data, people, lateness, lateByKey, device.fingerprint_key]);
 
   const [hidden, setHidden] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -838,26 +831,46 @@ function DownloadImage({
     setBusy(true);
     setError(null);
     try {
-      const kinds = IMAGE_KINDS.filter(([k]) => selected.some((r) => r.kinds[k]));
+      const none: ImageCell = { text: "—", muted: true };
+      const days = (list: string[], danger?: boolean): ImageCell =>
+        list.length ? { text: `${list.length} día${list.length === 1 ? "" : "s"}`, badge: danger ? "danger" : "plain", sub: [list.map(dayTag).join(", ")] } : none;
       const columns: ImageColumn[] = [
         { label: "Empleado" },
-        { label: "Tiempo tarde", align: "center" },
-        { label: "No se presentó", align: "center" },
-        ...kinds.map(([, label]) => ({ label, align: "center" as const })),
+        { label: "Huella" },
+        { label: "Días con marca" },
+        { label: "Llegadas tarde" },
+        { label: "Nocturnidad" },
+        { label: "Incapacidad" },
+        { label: "No se presentó" },
+        { label: "Compensatorio" },
       ];
-      const count = (n: number | undefined): ImageCell => (n ? { text: `${n} día${n === 1 ? "" : "s"}` } : { text: "—", muted: true });
-      const cells: ImageCell[][] = selected.map((r) => [
-        { text: r.name },
-        r.lateSeconds ? { text: fmtHms(r.lateSeconds), danger: true } : { text: "—", muted: true },
-        r.noShow ? { ...count(r.noShow), danger: true } : count(0),
-        ...kinds.map(([k]) => count(r.kinds[k])),
-      ]);
+      const cells: ImageCell[][] = selected.map(({ person: p, id }) => {
+        const ls = lateSummary(p, lateByKey);
+        const ns = nightSummary(p, lateByKey);
+        const dk = dayKinds(id, extra.data?.daysOff ?? [], lateness);
+        return [
+          { text: p.name ?? "", sub: p.code ? [p.code] : [] },
+          { text: p.badge, badge: "accent" },
+          { text: `${p.days.length} de ${periodDays}` },
+          ls.days
+            ? {
+                text: `${ls.days} día${ls.days === 1 ? "" : "s"}`,
+                badge: ls.counted ? "danger" : "plain",
+                sub: [`Total: ${fmtHms(ls.seconds)}`, ...(ls.counted ? [`${fmtMinutes(ls.counted)} cuentan como tarde`] : [])],
+              }
+            : none,
+          ns.days ? { text: `${ns.days} día${ns.days === 1 ? "" : "s"}`, badge: "plain", sub: [fmtHms(ns.seconds)] } : none,
+          days(dk.incapacidad),
+          days(dk.noShow, true),
+          days(dk.compensatorio),
+        ];
+      });
       const blob = await tableImage({
         title: `Marcaciones · Local ${local}`,
         subtitle: `${fmtRange(range)} · ${selected.length} empleado${selected.length === 1 ? "" : "s"}`,
         columns,
         rows: cells,
-        footer: "No se presentó: días con turno sin marcas y días marcados «No se presentó». Tiempo tarde: suma de las llegadas tarde del periodo.",
+        footer: `Se perdonan ${LATE_ALLOWANCE} min de llegada tarde por quincena. Nocturnidad: desde las ${NIGHT_START}. No se presentó: marcado así en Horarios o con turno sin marcas.`,
       });
       setPreview({ blob, url: URL.createObjectURL(blob) });
     } catch (err) {
