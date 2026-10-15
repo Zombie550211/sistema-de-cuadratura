@@ -11,6 +11,9 @@ Fin de semana: se trabaja un día (sábado o domingo) y se descansa el otro, alt
 semana. Si el agente no marcó el día que el horario le pone turno pero sí el otro día del mismo
 fin de semana (sin turno, o con día libre), se toma como intercambio: el día que vino toma el
 turno del fin de semana (misma hora de inicio) y el día del horario no queda como falta.
+
+Nocturnidad: lo que el turno trabajado pasa de las 19:00 (NIGHT_START_HOUR) hasta su fin. Los
+turnos de 13:00–21:00 y 17:00–21:00 dan 2 h por día. Solo cuenta si el agente marcó ese día.
 """
 
 from dataclasses import dataclass
@@ -38,6 +41,9 @@ class DayLateness:
     counted_minutes: int
     # Intercambio de fin de semana: fecha del turno que el agente trabajó este día.
     swapped_from: date | None = None
+    shift_end: datetime | None = None
+    # Segundos del turno después de la hora nocturna (0 si no marcó ese día).
+    night_seconds: int = 0
 
 
 def quincena_start(day: date) -> date:
@@ -80,20 +86,20 @@ def lateness(
     off_kind = {(emp_id, day): kind for emp_id, day, kind in db.execute(off_stmt)}
     shifts = {(s.employee_id, s.work_date): s for s in db.scalars(shift_stmt) if (s.employee_id, s.work_date) not in off_kind}
 
-    # (empleado, día trabajado, inicio del turno, fecha del turno si fue intercambio)
-    days: list[tuple[int, date, datetime, date | None]] = []
+    # (empleado, día trabajado, inicio y fin del turno, fecha del turno si fue intercambio)
+    days: list[tuple[int, date, datetime, datetime, date | None]] = []
     for (emp_id, day), shift in shifts.items():
         if day.weekday() >= 5 and (emp_id, day) not in first_punch:
             other = day + timedelta(days=1 if day.weekday() == 5 else -1)
             if (emp_id, other) in first_punch and (emp_id, other) not in shifts and off_kind.get((emp_id, other), "libre") == "libre":
-                begin = datetime.combine(other, shift.start_at.astimezone(tz).time(), tz)
-                days.append((emp_id, other, begin, day))
+                moved = other - day
+                days.append((emp_id, other, shift.start_at + moved, shift.end_at + moved, day))
                 continue
-        days.append((emp_id, day, shift.start_at, None))
+        days.append((emp_id, day, shift.start_at, shift.end_at, None))
 
     result: list[DayLateness] = []
     used: dict[tuple[int, date], int] = {}
-    for emp_id, day, begin, swapped in sorted(days, key=lambda d: (d[0], d[1])):
+    for emp_id, day, begin, end, swapped in sorted(days, key=lambda d: (d[0], d[1])):
         if not start <= day <= date_to:
             continue
         check_in = first_punch.get((emp_id, day))
@@ -103,6 +109,8 @@ def lateness(
         before = used.get(bucket, 0)
         after = before + late
         used[bucket] = after
+        night_from = max(begin, datetime.combine(day, time(settings.night_start_hour), tz))
+        night = max(int((end - night_from).total_seconds()), 0) if check_in else 0
         if day >= date_from:
             result.append(
                 DayLateness(
@@ -115,6 +123,8 @@ def lateness(
                     quincena_minutes=after,
                     counted_minutes=max(after - allowance, 0) - max(before - allowance, 0),
                     swapped_from=swapped,
+                    shift_end=end,
+                    night_seconds=night,
                 )
             )
     return result

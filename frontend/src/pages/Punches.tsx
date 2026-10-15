@@ -13,6 +13,7 @@ import {
   DAY_OFF_LABEL,
   LATE_ALLOWANCE,
   localName,
+  NIGHT_START,
   type Employee,
   type ImportBatch,
   type Lateness,
@@ -175,6 +176,23 @@ export function Punches() {
   // Llegadas tarde del periodo de todos los empleados con turno.
   const late = useAsync(() => api.get<Lateness[]>("/attendance/lateness", { date_from: from, date_to: to }), [from, to]);
   const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
+  // Días del horario del periodo (incapacidad, compensatorio, «No se presentó») de todos.
+  const daysOff = useAsync(() => api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: from, date_to: to }), [from, to]);
+
+  /** Días de incapacidad, de compensatorio y en que no se presentó, de una persona en el periodo. */
+  function dayKinds(employeeId: number | null) {
+    const none = { incapacidad: [], noShow: [], compensatorio: [] } as Record<"incapacidad" | "noShow" | "compensatorio", string[]>;
+    if (!employeeId) return none;
+    const mine = (daysOff.data ?? []).filter((d) => d.employee_id === employeeId);
+    const past = today();
+    // No se presentó: marcado así en Horarios, o tenía turno (ya pasado) y no hay marcas.
+    const missed = (late.data ?? []).filter((l) => l.employee_id === employeeId && !l.check_in && l.date < past).map((l) => l.date);
+    return {
+      incapacidad: mine.filter((d) => d.kind === "incapacidad" && !isNoShow(d)).map((d) => d.work_date).sort(),
+      noShow: [...new Set([...mine.filter(isNoShow).map((d) => d.work_date), ...missed])].sort(),
+      compensatorio: mine.filter((d) => d.kind === "compensatorio" && !isNoShow(d)).map((d) => d.work_date).sort(),
+    };
+  }
 
   function selectTab(id: number) {
     const next = new URLSearchParams(params);
@@ -211,6 +229,7 @@ export function Punches() {
     reload();
     locales.reload();
     late.reload();
+    daysOff.reload();
   }
 
   const people = useMemo(() => groupPeople(data?.items ?? []), [data]);
@@ -230,6 +249,11 @@ export function Punches() {
       counted: list.reduce((sum, l) => sum + (l?.counted_minutes ?? 0), 0),
       seconds: list.reduce((sum, l) => sum + (l?.late_seconds ?? 0), 0),
     };
+  }
+
+  function nightSummary(p: PersonRow) {
+    const list = p.employeeId ? p.days.map((d) => lateByKey.get(`${p.employeeId}|${d.date}`)).filter((l) => !!l?.night_seconds) : [];
+    return { days: list.length, seconds: list.reduce((sum, l) => sum + (l?.night_seconds ?? 0), 0) };
   }
 
   return (
@@ -339,12 +363,18 @@ export function Punches() {
                   <th>Huella</th>
                   <th>Días con marca</th>
                   <th title={`Días que entró después del inicio del turno. Se perdonan ${LATE_ALLOWANCE} min por quincena.`}>Llegadas tarde</th>
+                  <th title={`Días con marca cuyo turno pasa de las ${NIGHT_START}, y horas desde esa hora hasta el fin del turno.`}>Nocturnidad</th>
+                  <th title="Días de incapacidad en Horarios">Incapacidad</th>
+                  <th title="Días marcados «No se presentó» en Horarios y días con turno sin marcas">No se presentó</th>
+                  <th title="Días de compensatorio en Horarios">Compensatorio</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
                 {shown.map((p) => {
                   const ls = lateSummary(p);
+                  const ns = nightSummary(p);
+                  const dk = dayKinds(p.employeeId);
                   return (
                     <tr
                       key={p.key}
@@ -382,20 +412,20 @@ export function Punches() {
                           </>
                         )}
                       </td>
-                      <td className="num nowrap">
-                        {canEdit && (
-                          <button
-                            className="btn ghost sm"
-                            style={{ marginRight: 8 }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingKey(p.key);
-                            }}
-                            title="Corregir o eliminar marcas de esta persona en el periodo"
-                          >
-                            Editar
-                          </button>
+                      <td className="nowrap">
+                        {ns.days === 0 ? (
+                          <span className="muted">—</span>
+                        ) : (
+                          <>
+                            <span className="badge">{ns.days} día{ns.days === 1 ? "" : "s"}</span>
+                            <div className="caption" title="Horas nocturnas del periodo">{fmtHms(ns.seconds)}</div>
+                          </>
                         )}
+                      </td>
+                      <DayListCell dates={dk.incapacidad} />
+                      <DayListCell dates={dk.noShow} danger />
+                      <DayListCell dates={dk.compensatorio} />
+                      <td className="num nowrap">
                         <IconChevronRight width={18} height={18} className="muted" />
                       </td>
                     </tr>
@@ -407,8 +437,9 @@ export function Punches() {
         </div>
       )}
 
-      {open && !dialog && (
+      {open && !dialog && !editing && (
         <PersonQuincena
+          onEditAll={() => setEditingKey(open.key)}
           person={open}
           range={[from, to]}
           isCut={!!cut}
@@ -429,13 +460,15 @@ export function Punches() {
       {exporting && device && (
         <DownloadImage device={device} range={[from, to]} people={people} lateness={late.data ?? []} onClose={() => setExporting(false)} />
       )}
-      {editing && (
+      {editing && !dialog && (
         <EditPerson
+          onLink={(row) => setDialog({ kind: "link", row })}
           person={editing}
           range={[from, to]}
           onChanged={() => {
             reload();
             late.reload();
+            daysOff.reload();
           }}
           onDone={() => setEditingKey(null)}
         />
@@ -444,6 +477,25 @@ export function Punches() {
       {dialog?.kind === "link" && <LinkBadge row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
       {dialog?.kind === "delete" && <DeleteDay row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
     </div>
+  );
+}
+
+/** Día corto, p. ej. «Lun 3». */
+function dayTag(ymd: string) {
+  const wd = new Intl.DateTimeFormat("es-SV", { timeZone: "UTC", weekday: "short" }).format(new Date(`${ymd}T00:00:00Z`)).replace(".", "");
+  return `${wd.charAt(0).toUpperCase()}${wd.slice(1)} ${Number(ymd.slice(8))}`;
+}
+
+/** Celda con la cantidad de días y cuáles fueron («Lun 3, Mié 5»). */
+function DayListCell({ dates, danger }: { dates: string[]; danger?: boolean }) {
+  if (!dates.length) return <td><span className="muted">—</span></td>;
+  return (
+    <td style={{ minWidth: 110 }}>
+      <span className={`badge${danger ? " danger" : ""}`}>
+        {dates.length} día{dates.length === 1 ? "" : "s"}
+      </span>
+      <div className="caption">{dates.map(dayTag).join(", ")}</div>
+    </td>
   );
 }
 
@@ -456,8 +508,11 @@ function PersonQuincena({
   showDoubles,
   canEdit,
   onAction,
+  onEditAll,
   onClose,
 }: {
+  /** Abre la edición de todos los días del periodo a la vez. */
+  onEditAll: () => void;
   person: PersonRow;
   range: [string, string];
   /** El rango es la fecha de corte elegida, no una quincena. */
@@ -490,6 +545,8 @@ function PersonQuincena({
   );
   const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
   const lateTotal = (late.data ?? []).filter((l) => l.late_minutes > 0).reduce((sum, l) => sum + l.late_seconds, 0);
+  const nightDays = (late.data ?? []).filter((l) => l.night_seconds > 0);
+  const nightTotal = nightDays.reduce((sum, l) => sum + l.night_seconds, 0);
 
   // Horario del periodo (turnos y días libres) para compararlo con las marcas: así se ve qué
   // día del fin de semana le tocaba descansar (sábado o domingo, según la semana).
@@ -526,8 +583,22 @@ function PersonQuincena({
   const faltas = dates.filter((d) => check(d) === "falta").length;
   const workedOff = dates.filter((d) => check(d) === "descanso").length;
 
-  function actions(r: DayRow): RowAction[] {
-    const list: RowAction[] = [{ label: "Editar marcas", onClick: () => onAction({ kind: "edit", row: r }) }];
+  function actions(date: string, r?: DayRow): RowAction[] {
+    // Un día sin marcas también se edita: así se le corrige el horario.
+    const row: DayRow = r ?? {
+      key: `${date}|${person.badge}`,
+      date,
+      badge: person.badge,
+      deviceId,
+      employeeId: person.employeeId,
+      name: person.name,
+      code: person.code,
+      punches: [],
+      checkIn: null,
+      ignored: 0,
+    };
+    const list: RowAction[] = [{ label: "Editar", onClick: () => onAction({ kind: "edit", row }) }];
+    if (!r) return list;
     if (!r.name) list.push({ label: "Asignar a un empleado", onClick: () => onAction({ kind: "link", row: r }) });
     list.push({ label: "Eliminar marcas del día", danger: true, onClick: () => onAction({ kind: "delete", row: r }) });
     return list;
@@ -541,6 +612,11 @@ function PersonQuincena({
       <div className="row" style={{ gap: 12, marginBottom: 16, alignItems: "center" }}>
         <span className="sch-week">{isCut ? `Corte: ${fmtRange(range)}` : fmtRange(range)}</span>
         {lateTotal > 0 && <span className="badge danger" title="Total de llegada tarde en el periodo">Tarde en total: {fmtHms(lateTotal)}</span>}
+        {nightTotal > 0 && (
+          <span className="badge" title={`Horas del turno después de las ${NIGHT_START}, en los días que marcó`}>
+            Nocturnidad: {nightDays.length} día{nightDays.length === 1 ? "" : "s"} · {fmtHms(nightTotal)}
+          </span>
+        )}
         {faltas > 0 && <span className="badge danger" title="Días con turno en el horario y sin marcas">{faltas} falta{faltas === 1 ? "" : "s"}</span>}
         {workedOff > 0 && <span className="badge warn" title="Días que el horario marca como descanso y tienen marcas">Marcó {workedOff} día{workedOff === 1 ? "" : "s"} de descanso</span>}
         {(punches.loading || late.loading) && <div className="spinner" style={{ width: 16, height: 16 }} />}
@@ -562,6 +638,7 @@ function PersonQuincena({
               {person.employeeId && <th>Horario</th>}
               <th>Marcas</th>
               {person.employeeId && <th>Llegada tarde</th>}
+              {person.employeeId && <th title={`Horas del turno después de las ${NIGHT_START}`}>Nocturnidad</th>}
               {canEdit && <th className="row-actions" />}
             </tr>
           </thead>
@@ -630,7 +707,15 @@ function PersonQuincena({
                   </td>
                   {person.employeeId &&
                     (r ? <LateCell late={lateByKey.get(`${person.employeeId}|${date}`)} off={off} /> : <td className="nowrap"><span className="muted">—</span></td>)}
-                  {canEdit && <td className="num row-actions">{r && <RowMenu actions={actions(r)} />}</td>}
+                  {person.employeeId && (
+                    <td className="nowrap">
+                      {(() => {
+                        const n = lateByKey.get(`${person.employeeId}|${date}`)?.night_seconds ?? 0;
+                        return n > 0 ? <span className="badge" title={`Desde las ${NIGHT_START} hasta el fin del turno`}>{fmtHms(n)}</span> : <span className="muted">—</span>;
+                      })()}
+                    </td>
+                  )}
+                  {canEdit && <td className="num row-actions">{(r || person.employeeId) && <RowMenu actions={actions(date, r)} />}</td>}
                 </tr>
               );
             })}
@@ -638,6 +723,11 @@ function PersonQuincena({
         </table>
       </div>
       <div className="modal-foot">
+        {canEdit && (
+          <button className="btn ghost" onClick={onEditAll} title="Corregir horario y marcas de todos los días del periodo">
+            Editar todo el periodo
+          </button>
+        )}
         <button className="btn" onClick={onClose}>
           Cerrar
         </button>
@@ -721,7 +811,14 @@ function DownloadImage({
   const [hidden, setHidden] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Vista previa: la imagen ya generada, que se revisa antes de descargarla.
+  const [preview, setPreview] = useState<{ blob: Blob; url: string } | null>(null);
   const selected = rows.filter((r) => !hidden.has(r.id));
+  const fileName = `marcaciones-${local}-${from}-a-${to}.png`;
+
+  useEffect(() => () => {
+    if (preview) URL.revokeObjectURL(preview.url);
+  }, [preview]);
 
   function toggle(id: number) {
     const next = new Set(hidden);
@@ -730,7 +827,7 @@ function DownloadImage({
     setHidden(next);
   }
 
-  async function download() {
+  async function generate() {
     setBusy(true);
     setError(null);
     try {
@@ -755,13 +852,39 @@ function DownloadImage({
         rows: cells,
         footer: "No se presentó: días con turno sin marcas y días marcados «No se presentó». Tiempo tarde: suma de las llegadas tarde del periodo.",
       });
-      downloadBlob(blob, `marcaciones-${local}-${from}-a-${to}.png`);
-      onClose();
+      setPreview({ blob, url: URL.createObjectURL(blob) });
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setBusy(false);
     }
+  }
+
+  if (preview) {
+    return (
+      <Modal title={`Vista previa · Local ${local}`} onClose={onClose} wide>
+        <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
+          {fmtRange(range)} · {selected.length} empleado{selected.length === 1 ? "" : "s"} · Revise la imagen antes de descargarla.
+        </p>
+        <div style={{ maxHeight: "60vh", overflow: "auto", border: "1px solid var(--border, #e2e8f0)", borderRadius: 12 }}>
+          <img src={preview.url} alt={`Tabla de marcaciones del local ${local}`} style={{ display: "block", width: "100%", height: "auto" }} />
+        </div>
+        <div className="modal-foot">
+          <button className="btn ghost" onClick={() => setPreview(null)}>
+            Volver a elegir
+          </button>
+          <button
+            className="btn"
+            onClick={() => {
+              downloadBlob(preview.blob, fileName);
+              onClose();
+            }}
+          >
+            Descargar imagen
+          </button>
+        </div>
+      </Modal>
+    );
   }
 
   return (
@@ -808,8 +931,8 @@ function DownloadImage({
         <button className="btn ghost" onClick={onClose}>
           Cancelar
         </button>
-        <button className="btn" disabled={busy || !selected.length} onClick={download}>
-          {busy ? "Generando…" : "Descargar imagen"}
+        <button className="btn" disabled={busy || !selected.length} onClick={generate}>
+          {busy ? "Generando…" : "Vista previa"}
         </button>
       </div>
     </Modal>
@@ -902,16 +1025,48 @@ function LateCell({ late, off }: { late?: Lateness; off?: ShiftDayOff }) {
   );
 }
 
-/** Todas las marcas de una persona en un día: RRHH corrige la hora o elimina una marca. */
+/** Un día de una persona: RRHH corrige el horario (el mismo de Horarios) y la hora de las
+ *  marcas, o elimina una marca. */
 function EditDay({ row, onChanged, onDone }: { row: DayRow; onChanged: () => void; onDone: () => void }) {
+  const employeeId = row.employeeId;
+  const schedule = useAsync(
+    () =>
+      employeeId
+        ? Promise.all([
+            api.get<ShiftAssignment[]>("/schedules/assignments", { date_from: row.date, date_to: row.date, employee_id: employeeId }),
+            api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: row.date, date_to: row.date }),
+          ])
+        : Promise.resolve(null),
+    [employeeId, row.date],
+  );
+  const shift = schedule.data?.[0][0];
+  const off = schedule.data?.[1].find((d) => d.employee_id === employeeId);
+
   return (
-    <Modal title="Editar marcas" onClose={onDone}>
+    <Modal title="Editar" onClose={onDone}>
       <div className="stack">
         <p>
           <b>{row.name ?? `ID ${row.badge} sin empleado`}</b> · {fmtLongDate(row.date)} · huella {row.badge}
         </p>
-        <p className="caption">Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj.</p>
-        <DayPunchEditor row={row} onChanged={onChanged} />
+        <p className="caption">Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj. La llegada tarde se calcula contra el horario del día.</p>
+        {schedule.error && <div className="alert">{schedule.error}</div>}
+        {employeeId ? (
+          <DayShiftEditor
+            key={`${shift?.id}|${shift?.start_at}|${shift?.end_at}|${off?.id}`}
+            employeeId={employeeId}
+            date={row.date}
+            shift={shift}
+            off={off}
+            loading={schedule.loading && !schedule.data}
+            onChanged={() => {
+              schedule.reload();
+              onChanged();
+            }}
+          />
+        ) : (
+          <div className="caption">Horario: esta huella no tiene empleado; asígnela a un empleado para ver y editar su turno.</div>
+        )}
+        {row.punches.length > 0 ? <DayPunchEditor row={row} onChanged={onChanged} /> : <div className="caption">Este día no tiene marcas.</div>}
       </div>
       <div className="modal-foot">
         <button className="btn" onClick={onDone}>
@@ -923,18 +1078,73 @@ function EditDay({ row, onChanged, onDone }: { row: DayRow; onChanged: () => voi
 }
 
 /** Edición de las marcas de una persona en todo el periodo (quincena o fecha de corte), día por día. */
-function EditPerson({ person, range, onChanged, onDone }: { person: PersonRow; range: [string, string]; onChanged: () => void; onDone: () => void }) {
+function EditPerson({
+  person,
+  range,
+  onChanged,
+  onLink,
+  onDone,
+}: {
+  person: PersonRow;
+  range: [string, string];
+  onChanged: () => void;
+  /** Huella sin empleado: abrir la ventana para asignarla. */
+  onLink?: (row: DayRow) => void;
+  onDone: () => void;
+}) {
+  const [from, to] = range;
+  // Horario del periodo: la llegada tarde se calcula contra el turno, así que se corrige aquí mismo.
+  const schedule = useAsync(
+    () =>
+      person.employeeId
+        ? Promise.all([
+            api.get<ShiftAssignment[]>("/schedules/assignments", { date_from: from, date_to: to, employee_id: person.employeeId }),
+            api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: from, date_to: to }),
+          ])
+        : Promise.resolve(null),
+    [person.employeeId, from, to],
+  );
+  const shiftByDate = new Map((schedule.data?.[0] ?? []).map((a) => [a.work_date, a]));
+  const offByDate = new Map((schedule.data?.[1] ?? []).filter((d) => d.employee_id === person.employeeId).map((d) => [d.work_date, d]));
+
   return (
     <Modal title="Editar marcación" onClose={onDone} wide>
       <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
         <b>{person.name ?? `ID ${person.badge} sin empleado`}</b> · {person.code && `${person.code} · `}Huella {person.badge} · {fmtRange(range)}
         <br />
-        Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj.
+        Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj. La llegada tarde se calcula contra el horario del día.
       </p>
+      {schedule.error && <div className="alert" style={{ marginBottom: 16 }}>{schedule.error}</div>}
       <div className="stack">
         {person.days.map((d) => (
           <div key={d.key} className="card" style={{ padding: 16 }}>
             <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>{fmtLongDate(d.date)}</h3>
+            {!person.employeeId ? (
+              <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <span className="caption" style={{ width: 56 }}>Horario</span>
+                <span className="badge warn">Sin empleado</span>
+                <span className="caption" style={{ flex: 1 }}>El horario es del empleado: asigne esta huella a un empleado para ver y editar su turno.</span>
+                {onLink && (
+                  <button className="btn sm" onClick={() => onLink(d)}>
+                    Asignar a un empleado
+                  </button>
+                )}
+              </div>
+            ) : (
+              <DayShiftEditor
+                // Se vuelve a montar al recargar el horario, para mostrar lo guardado.
+                key={`${shiftByDate.get(d.date)?.id ?? "x"}|${shiftByDate.get(d.date)?.start_at}|${shiftByDate.get(d.date)?.end_at}|${offByDate.get(d.date)?.id}`}
+                employeeId={person.employeeId}
+                date={d.date}
+                shift={shiftByDate.get(d.date)}
+                off={offByDate.get(d.date)}
+                loading={schedule.loading && !schedule.data}
+                onChanged={() => {
+                  schedule.reload();
+                  onChanged();
+                }}
+              />
+            )}
             <DayPunchEditor row={d} onChanged={onChanged} />
           </div>
         ))}
@@ -945,6 +1155,85 @@ function EditPerson({ person, range, onChanged, onDone }: { person: PersonRow; r
         </button>
       </div>
     </Modal>
+  );
+}
+
+/** Horario de un día con las horas editables: cambia el turno (o pone uno si no tenía o era
+ *  descanso). El cambio queda como manual y se devuelve al CRM, igual que en Horarios. */
+function DayShiftEditor({
+  employeeId,
+  date,
+  shift,
+  off,
+  loading,
+  onChanged,
+}: {
+  employeeId: number;
+  date: string;
+  shift?: ShiftAssignment;
+  off?: ShiftDayOff;
+  loading: boolean;
+  onChanged: () => void;
+}) {
+  const [start, setStart] = useState(shift ? fmtTime(shift.start_at) : "");
+  const [end, setEnd] = useState(shift ? fmtTime(shift.end_at) : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dirty = shift ? start !== fmtTime(shift.start_at) || end !== fmtTime(shift.end_at) : !!start && !!end;
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (shift) {
+        await api.put(`/schedules/assignments/${shift.id}`, {
+          work_date: date,
+          start_time: start,
+          end_time: end,
+          break_minutes: shift.break_minutes,
+          tolerance_minutes: shift.tolerance_minutes,
+          notes: shift.notes,
+        });
+      } else {
+        await api.post("/schedules/assignments/bulk", {
+          employee_ids: [employeeId],
+          date_from: date,
+          date_to: date,
+          weekdays: [(new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7],
+          start_time: start,
+          end_time: end,
+          overwrite: true,
+        });
+      }
+      onChanged();
+    } catch (err) {
+      setError((err as ApiError).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="stack" style={{ marginBottom: 12 }}>
+      <div className="row" style={{ alignItems: "center", gap: 8 }}>
+        <span className="caption" style={{ width: 56 }}>Horario</span>
+        <input className="input mono" type="time" style={{ width: 130 }} value={start} disabled={loading} onChange={(e) => setStart(e.target.value)} aria-label="Inicio del turno" />
+        <span className="muted">–</span>
+        <input className="input mono" type="time" style={{ width: 130 }} value={end} disabled={loading} onChange={(e) => setEnd(e.target.value)} aria-label="Fin del turno" />
+        <span className="caption" style={{ flex: 1 }}>
+          {loading
+            ? "…"
+            : shift
+              ? shift.source === "crm" ? "Turno del CRM" : "Turno asignado aquí"
+              : off
+                ? `${isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]} · al guardar se le pone turno`
+                : "Sin horario"}
+        </span>
+        <button className="btn sm" disabled={!dirty || busy || loading} onClick={save}>
+          {busy ? "Guardando…" : "Guardar horario"}
+        </button>
+      </div>
+      {error && <div className="alert">{error}</div>}
+    </div>
   );
 }
 

@@ -225,7 +225,13 @@ export interface Lateness {
   counted_minutes: number;
   /** Intercambio de fin de semana: fecha del turno que trabajó este día (vino sábado en vez de domingo o al revés). */
   swapped_from: string | null;
+  shift_end: string | null;
+  /** Segundos del turno después de las 19:00 (nocturnidad); 0 si ese día no marcó. */
+  night_seconds: number;
 }
+
+/** Hora desde la que el turno cuenta como nocturnidad (hasta que termina). */
+export const NIGHT_START = "7:00 p. m.";
 
 /** Minutos de llegada tarde que se perdonan por quincena. */
 export const LATE_ALLOWANCE = 15;

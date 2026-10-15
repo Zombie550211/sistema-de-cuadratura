@@ -35,3 +35,28 @@ def test_lateness_accumulates_per_quincena(login):
         "2026-09-17": (0, 12, 0),
         "2026-09-18": (5, 17, 2),
     }
+
+
+def test_night_hours_from_seven_pm(login):
+    """Nocturnidad: lo que el turno pasa de las 19:00; solo los días que marcó."""
+    client = login("rrhh")
+    emp = _employee(client, badge_number="84")
+    _shift(client, emp["id"], "2026-09-14", "13:00", "21:00")  # 2 h
+    _shift(client, emp["id"], "2026-09-15", "17:00", "21:00")  # 2 h
+    _shift(client, emp["id"], "2026-09-16", "10:00", "19:00")  # termina a las 7: 0
+    _shift(client, emp["id"], "2026-09-17", "13:00", "21:00")  # no marcó: 0
+    attlog = (
+        b"84\t2026-09-14 13:05:00\t1\t4\t1\t0\n"
+        b"84\t2026-09-15 16:58:00\t1\t4\t1\t0\n"
+        b"84\t2026-09-16 10:00:00\t1\t4\t1\t0\n"
+    )
+    r = client.post("/api/attendance/imports", files={"file": ("BINH221860214_attlog.dat", attlog, "text/plain")})
+    assert r.status_code == 201, r.text
+
+    rows = client.get("/api/attendance/lateness", params={"date_from": "2026-09-14", "date_to": "2026-09-17", "employee_id": emp["id"]}).json()
+    assert {r["date"]: r["night_seconds"] for r in rows} == {
+        "2026-09-14": 7200,
+        "2026-09-15": 7200,
+        "2026-09-16": 0,
+        "2026-09-17": 0,
+    }

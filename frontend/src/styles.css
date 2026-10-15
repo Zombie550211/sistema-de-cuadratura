@@ -572,7 +572,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ---------- Menú ⋯ de cada fila ---------- */
 .row-menu-btn { display: inline-grid; place-items: center; }
-.row-menu-backdrop { position: fixed; inset: 0; z-index: 40; }
+.row-menu-backdrop { position: fixed; inset: 0; z-index: 70; }
 .row-menu {
   position: fixed; min-width: 180px; padding: 6px; display: flex; flex-direction: column;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm);

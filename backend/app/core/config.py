@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     double_tap_seconds: int = 120
     # Minutos de llegada tarde que se perdonan por quincena; lo que pase de ahí cuenta.
     late_allowance_minutes: int = 15
+    # Hora (local) desde la que el turno cuenta como nocturnidad, hasta que termina (13–21 y 17–21).
+    night_start_hour: int = 19
 
     storage_backend: str = "local"  # local | s3
     storage_local_dir: str = "./storage"
