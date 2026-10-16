@@ -4,7 +4,8 @@ import { Link, useParams } from "react-router-dom";
 import { IconChevronLeft, IconChevronRight, IconFile } from "../components/Icons";
 import { type IssuedCertificate, printCertificate, SalaryCertificate, sanitizeCertificateHtml, TEMPLATES } from "../components/SalaryCertificate";
 import { useNow } from "../components/LiveClock";
-import { api, AREAS, areaPath, DAY_OFF_LABEL, DOCS, type Department, type Employee, type EmployeeSchedule, type ShiftTemplate, type WorkDay } from "../lib/api";
+import { Modal } from "../components/Modal";
+import { api, AREAS, areaPath, DAY_OFF_LABEL, DOCS, type CompensatoryStatus, type Department, type Employee, type EmployeeSchedule, type ShiftTemplate, type WorkDay } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { addDays, fmtBirthday, fmtDate, fmtDateTime, fmtMoney, fmtShortDay, fmtTime, fmtTimeSec, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
@@ -25,6 +26,7 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
   const [start, setStart] = useState(() => weekStart(today()));
   const [editing, setEditing] = useState(false);
   const [certificate, setCertificate] = useState(false);
+  const [compensating, setCompensating] = useState(false);
   const [assigning, setAssigning] = useState<false | "turno" | "vacacion" | "compensatorio">(false);
   const end = addDays(start, 6);
 
@@ -167,6 +169,11 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
             <button className="btn ghost sm" onClick={() => setStart(weekStart(today()))}>
               Esta semana
             </button>
+            {canEdit && e.status === "activo" && (
+              <button className="btn sm" onClick={() => setCompensating(true)}>
+                Compensatorio
+              </button>
+            )}
           </div>
           <span className="caption">
             {schedule.data?.last_crm_sync_at
@@ -209,6 +216,18 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
           onClose={() => setAssigning(false)}
           onDone={() => {
             setAssigning(false);
+            schedule.reload();
+          }}
+        />
+      )}
+      {compensating && (
+        <CompensatoryModal
+          employee={e}
+          initialMonth={start.slice(0, 7)}
+          onClose={() => setCompensating(false)}
+          onDone={(day) => {
+            setCompensating(false);
+            setStart(weekStart(day));
             schedule.reload();
           }}
         />
@@ -306,6 +325,134 @@ function DayRow({ day, maxHour }: { day: WorkDay; maxHour: number }) {
         </div>
       )}
     </>
+  );
+}
+
+const monthFmt = new Intl.DateTimeFormat("es-SV", { timeZone: "UTC", month: "long", year: "numeric" });
+
+/** Primer día del mes `ym` (aaaa-mm) movido `n` meses. */
+function shiftMonth(ym: string, n: number): string {
+  const d = new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1 + n, 1));
+  return d.toISOString().slice(0, 7);
+}
+
+/** Asigna un compensatorio: se elige cuál de los asuetos ganados (y sin usar) se da y luego, en
+ *  el calendario, qué día lo descansa. La nota lleva la fecha del asueto, así queda usado. */
+function CompensatoryModal({
+  employee,
+  initialMonth,
+  onClose,
+  onDone,
+}: {
+  employee: Employee;
+  initialMonth: string;
+  onClose: () => void;
+  onDone: (day: string) => void;
+}) {
+  const status = useAsync(() => api.get<CompensatoryStatus[]>("/schedules/compensatory", { area: employee.area }), [employee.area]);
+  const available = status.data?.find((s) => s.employee_id === employee.id)?.available ?? [];
+  const [holidayId, setHolidayId] = useState("");
+  const [month, setMonth] = useState(initialMonth);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const first = `${month}-01`;
+  const last = addDays(`${shiftMonth(month, 1)}-01`, -1);
+  const monthDays = useAsync(
+    () => (holidayId ? api.get<EmployeeSchedule>(`/employees/${employee.id}/schedule`, { date_from: first, date_to: last }) : Promise.resolve(null)),
+    [holidayId, employee.id, first, last],
+  );
+  const offOf = new Map((monthDays.data?.days ?? []).filter((d) => d.day_off && d.day_off.kind !== "libre").map((d) => [d.date, d.day_off!]));
+  const holiday = available.find((h) => String(h.id) === holidayId);
+  // Lunes primero: cuántas casillas vacías van antes del día 1.
+  const lead = (new Date(`${first}T00:00:00Z`).getUTCDay() + 6) % 7;
+  const count = Number(last.slice(8));
+
+  async function pick(day: string) {
+    if (!holiday) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post("/schedules/days-off", {
+        employee_id: employee.id,
+        work_date: day,
+        kind: "compensatorio",
+        notes: `Compensatorio ${fmtDate(holiday.day)} (${holiday.name})`,
+      });
+      onDone(day);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={`Compensatorio de ${employee.full_name}`} onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {status.error && <div className="alert">{status.error}</div>}
+        {status.data && !available.length ? (
+          <div className="alert info">No tiene compensatorios disponibles: no ha marcado en ningún asueto o ya los usó todos.</div>
+        ) : (
+          <label className="field">
+            <span>Compensatorio disponible</span>
+            <select className="input" value={holidayId} onChange={(ev) => setHolidayId(ev.target.value)} disabled={!status.data}>
+              <option value="">{status.data ? "Elija el asueto que se compensa…" : "Cargando…"}</option>
+              {available.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {fmtDate(h.day)} · {h.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {holiday && (
+          <div className="month-cal">
+            <span className="caption">Elija el día del mes en que lo descansa. Si ese día tenía turno, se quita (también en el CRM).</span>
+            <div className="month-cal-head">
+              <button className="icon-btn" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Mes anterior">
+                <IconChevronLeft width={20} height={20} />
+              </button>
+              <b>{monthFmt.format(new Date(`${first}T00:00:00Z`))}</b>
+              <button className="icon-btn" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Mes siguiente">
+                <IconChevronRight width={20} height={20} />
+              </button>
+            </div>
+            <div className="month-cal-grid">
+              {["L", "M", "M", "J", "V", "S", "D"].map((d, i) => (
+                <span key={i} className="month-cal-dow">
+                  {d}
+                </span>
+              ))}
+              {Array.from({ length: lead }, (_, i) => (
+                <span key={`e${i}`} />
+              ))}
+              {Array.from({ length: count }, (_, i) => {
+                const day = `${month}-${String(i + 1).padStart(2, "0")}`;
+                const off = offOf.get(day);
+                return (
+                  <button
+                    key={day}
+                    className={`month-cal-day${day === today() ? " today" : ""}${off ? " taken" : ""}`}
+                    disabled={busy || !!off || monthDays.loading}
+                    title={off ? `${DAY_OFF_LABEL[off.kind]}${off.notes ? ` · ${off.notes}` : ""}` : `Dar el compensatorio el ${fmtDate(day)}`}
+                    onClick={() => pick(day)}
+                  >
+                    {i + 1}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {error && <div className="alert">{error}</div>}
+      </div>
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose}>
+          Cancelar
+        </button>
+      </div>
+    </Modal>
   );
 }
 

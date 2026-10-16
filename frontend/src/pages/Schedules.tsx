@@ -40,6 +40,7 @@ const POP_DAY_OFF: { key: DayOffKind | "no_show"; kind: DayOffKind; label: strin
   { key: "no_show", kind: "libre", label: NO_SHOW.label, color: NO_SHOW.color },
 ];
 const DOW = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const MONTH_ABBR = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
 /** Por debajo de este número de agentes en turno, la hora se marca como descubierta. */
 const MIN_COVERAGE = 4;
 /** Horas semanales a partir de las que se avisa (jornada ordinaria diurna en El Salvador). */
@@ -292,7 +293,7 @@ export function Schedules({ area }: { area: Area }) {
             <button key={d} className={`sch-day${i === dayIndex ? " on" : ""}`} onClick={() => setDayIndex(i)}>
               <span className="sch-day-top">
                 <b>
-                  {DOW[i]} {d.slice(8)}
+                  {DOW[i]} {d.slice(8)} <span className="sch-day-month">{MONTH_ABBR[Number(d.slice(5, 7)) - 1]}</span>
                 </b>
                 {d === today() && <i>Hoy</i>}
               </span>

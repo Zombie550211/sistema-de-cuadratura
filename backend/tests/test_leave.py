@@ -117,4 +117,16 @@ def test_holiday_with_punch_earns_compensatory_and_without_is_lost(client, login
     status = {s["employee_id"]: s for s in hr.get("/api/schedules/compensatory").json()}
     assert [h["day"] for h in status[worked["id"]]["earned"]] == ["2026-09-15"]
     assert (status[worked["id"]]["taken"], status[worked["id"]]["balance"]) == (1, 0)
+    assert status[worked["id"]]["available"] == []
     assert status[absent["id"]]["earned"] == [] and [h["day"] for h in status[absent["id"]]["lost"]] == ["2026-09-15"]
+
+
+def test_compensatory_note_uses_that_holiday(db):
+    from datetime import date
+
+    from app.models import Holiday
+    from app.services.compensatory import unused
+
+    a, b, c = Holiday(day=date(2026, 5, 1), name="A"), Holiday(day=date(2026, 8, 6), name="B"), Holiday(day=date(2026, 9, 15), name="C")
+    assert [h.name for h in unused([a, b, c], ["Compensatorio 15/09/2026"])] == ["A", "B"]
+    assert [h.name for h in unused([a, b, c], [None, "COMPENSATORIO 15/09/2026"])] == ["B"]

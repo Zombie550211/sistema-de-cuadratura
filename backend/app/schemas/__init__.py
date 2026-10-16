@@ -372,6 +372,7 @@ class CompensatoryStatusOut(BaseModel):
     earned: list[HolidayOut]
     lost: list[HolidayOut]
     taken: int
+    available: list[HolidayOut]
     balance: int
 
 

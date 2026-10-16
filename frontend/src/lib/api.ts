@@ -330,6 +330,8 @@ export interface CompensatoryStatus {
   earned: Holiday[];
   lost: Holiday[];
   taken: number;
+  /** Ganados que aún no se han usado en un día compensatorio. */
+  available: Holiday[];
   balance: number;
 }
 

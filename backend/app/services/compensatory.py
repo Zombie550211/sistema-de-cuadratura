@@ -71,10 +71,26 @@ class CompensatoryStatus:
     earned: list[Holiday] = field(default_factory=list)
     lost: list[Holiday] = field(default_factory=list)
     taken: int = 0
+    # Ganados que aún no se han usado en un día compensatorio.
+    available: list[Holiday] = field(default_factory=list)
 
     @property
     def balance(self) -> int:
         return len(self.earned) - self.taken
+
+
+def unused(earned: list[Holiday], notes: list[str | None]) -> list[Holiday]:
+    """Asuetos ganados sin usar. Un día compensatorio usa el asueto cuya fecha (dd/mm/aaaa) trae
+    en la nota; los que no dicen cuál usan el más antiguo que quede."""
+    left = sorted(earned, key=lambda h: h.day)
+    untagged = 0
+    for note in notes:
+        match = next((h for h in left if h.day.strftime("%d/%m/%Y") in (note or "")), None)
+        if match is None:
+            untagged += 1
+        else:
+            left.remove(match)
+    return left[untagged:]
 
 
 def compensatory_status(db: Session, employees: list[Employee], today: date) -> list[CompensatoryStatus]:
@@ -98,17 +114,16 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
             if emp_id is not None:
                 marked.add((emp_id, day))
 
-    taken = dict(
-        db.execute(
-            select(ShiftDayOff.employee_id, func.count())
-            .where(ShiftDayOff.kind == "compensatorio", ShiftDayOff.employee_id.in_(ids))
-            .group_by(ShiftDayOff.employee_id)
-        ).all()
-    ) if ids else {}
+    notes: dict[int, list[str | None]] = {}
+    if ids:
+        for emp_id, note in db.execute(
+            select(ShiftDayOff.employee_id, ShiftDayOff.notes).where(ShiftDayOff.kind == "compensatorio", ShiftDayOff.employee_id.in_(ids))
+        ):
+            notes.setdefault(emp_id, []).append(note)
 
     out = []
     for e in employees:
-        s = CompensatoryStatus(e.id, taken=taken.get(e.id, 0))
+        s = CompensatoryStatus(e.id, taken=len(notes.get(e.id, [])))
         for h in holidays:
             if e.hire_date and h.day < e.hire_date:
                 continue
@@ -116,5 +131,6 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
                 s.earned.append(h)
             elif h.day in days_with_data:
                 s.lost.append(h)
+        s.available = unused(s.earned, notes.get(e.id, []))
         out.append(s)
     return out

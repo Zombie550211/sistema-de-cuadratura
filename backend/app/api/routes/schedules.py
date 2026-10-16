@@ -364,7 +364,7 @@ def list_compensatory(db: DB, _: Staff, area: Annotated[str | None, Query(max_le
     ensure_years(db, data_years(db, today))
     db.commit()
     return [
-        CompensatoryStatusOut(employee_id=s.employee_id, earned=s.earned, lost=s.lost, taken=s.taken, balance=s.balance)
+        CompensatoryStatusOut(employee_id=s.employee_id, earned=s.earned, lost=s.lost, taken=s.taken, available=s.available, balance=s.balance)
         for s in compensatory_status(db, _active_employees(db, area), today)
     ]
 
