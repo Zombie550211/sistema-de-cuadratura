@@ -29,8 +29,8 @@ const C = {
   accent: "#0891b2",
   plainBg: "#eef2f6",
 };
-const UI = '"Plus Jakarta Sans", system-ui, sans-serif';
-const DISPLAY = '"Outfit", system-ui, sans-serif';
+const UI = '"Inter Variable", system-ui, sans-serif';
+const DISPLAY = '"Inter Variable", system-ui, sans-serif';
 const PAD = 32;
 const CELL_X = 16;
 const CELL_Y = 14;

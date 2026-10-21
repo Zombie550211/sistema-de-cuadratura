@@ -1,3 +1,5 @@
+import "@fontsource-variable/inter";
+import "@fontsource-variable/manrope";
 import "@fontsource/outfit/600.css";
 import "@fontsource/outfit/700.css";
 import "@fontsource/plus-jakarta-sans/400.css";
@@ -16,7 +18,6 @@ import { Dashboard } from "./pages/Dashboard";
 import { EmployeeProfile, EmployeeProfilePage } from "./pages/EmployeeProfile";
 import { GoogleAdsReceipts } from "./pages/GoogleAdsReceipts";
 import { Employees } from "./pages/Employees";
-import { Import } from "./pages/Import";
 import { Integrations } from "./pages/Integrations";
 import { Login } from "./pages/Login";
 import { Leave } from "./pages/Leave";
@@ -73,7 +74,8 @@ function App() {
         <Route index element={<Dashboard />} />
         <Route path="marcaciones" element={<Punches />} />
         <Route path="marcaciones/*" element={<KeepQuery to="/marcaciones" />} />
-        <Route path="importar" element={<Guard roles={["admin", "rrhh"]}><Import /></Guard>} />
+        {/* Importar reloj quedó dentro de Marcaciones. */}
+        <Route path="importar" element={<Navigate to="/marcaciones?importar=1" replace />} />
         <Route path="horarios" element={<KeepQuery to={`/horarios/${AREAS.find((a) => a.area === "ventas")!.slug}`} />} />
         {AREAS.map((a) => (
           <Route key={a.slug} path={`horarios/${a.slug}`} element={<Guard roles={STAFF}><Schedules key={a.area} area={a.area} /></Guard>} />

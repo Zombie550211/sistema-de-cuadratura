@@ -168,6 +168,45 @@ def list_punches(
 
 
 CUT_DATE = "marcaciones.fecha_corte"
+# Fechas de corte que RRHH ha guardado, la más reciente primero, para volver a elegirlas.
+CUT_DATES = "marcaciones.fechas_corte"
+MAX_CUT_DATES = 20
+
+
+def _saved_cuts(db: DB) -> list[dict]:
+    setting = db.get(AppSetting, CUT_DATES)
+    items = list(setting.value.get("items", [])) if setting else []
+    active = db.get(AppSetting, CUT_DATE)
+    if active is not None and active.value not in items:
+        items.insert(0, active.value)
+    return items
+
+
+def _store_cuts(db: DB, items: list[dict], user_id: int) -> None:
+    setting = db.get(AppSetting, CUT_DATES)
+    value = {"items": items[:MAX_CUT_DATES]}
+    if setting is None:
+        db.add(AppSetting(key=CUT_DATES, value=value, updated_by_id=user_id))
+    else:
+        setting.value, setting.updated_by_id = value, user_id
+
+
+@router.get("/attendance/cut-dates", response_model=list[CutDate])
+def list_cut_dates(db: DB, _: Staff):
+    """Fechas de corte guardadas, la más reciente primero (incluye la que está aplicada)."""
+    return [CutDate(**v) for v in _saved_cuts(db)]
+
+
+@router.delete("/attendance/cut-dates", status_code=204)
+def delete_cut_date(db: DB, user: HR, date_from: date, date_to: date):
+    """Quita una fecha de corte de las guardadas; si es la aplicada, también deja de aplicarse."""
+    value = CutDate(date_from=date_from, date_to=date_to).model_dump(mode="json")
+    _store_cuts(db, [v for v in _saved_cuts(db) if v != value], user.id)
+    active = db.get(AppSetting, CUT_DATE)
+    if active is not None and active.value == value:
+        db.delete(active)
+    audit.record(db, user, "borrar_fecha_corte", "app_setting", CUT_DATES, value)
+    db.commit()
 
 
 @router.get("/attendance/cut-date", response_model=CutDate | None)
@@ -188,6 +227,7 @@ def set_cut_date(data: CutDate, db: DB, user: HR):
         db.add(AppSetting(key=CUT_DATE, value=value, updated_by_id=user.id))
     else:
         setting.value, setting.updated_by_id = value, user.id
+    _store_cuts(db, [value] + [v for v in _saved_cuts(db) if v != value], user.id)
     audit.record(db, user, "fecha_corte", "app_setting", CUT_DATE, value)
     db.commit()
     return data

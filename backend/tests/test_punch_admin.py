@@ -138,3 +138,25 @@ def test_excel_reads_every_punch_sheet(login):
     r = client.post("/api/attendance/imports", files={"file": ("asistencia.xlsx", buf.getvalue(), "application/octet-stream")}, data={"local": "LA17"})
     assert r.status_code == 201, r.text
     assert r.json()["inserted"] == 2
+
+
+def test_saved_cut_dates_history(login):
+    client = login("rrhh")
+    a = {"date_from": "2026-09-01", "date_to": "2026-09-20"}
+    b = {"date_from": "2026-09-16", "date_to": "2026-10-05"}
+    assert client.put("/api/attendance/cut-date", json=a).status_code == 200
+    assert client.put("/api/attendance/cut-date", json=b).status_code == 200
+    assert client.put("/api/attendance/cut-date", json=a).status_code == 200
+    # La más reciente primero y sin repetidas.
+    assert client.get("/api/attendance/cut-dates").json() == [a, b]
+
+    # Quitar la aplicada solo deja de aplicarla: sigue guardada para volver a elegirla.
+    assert client.delete("/api/attendance/cut-date").status_code == 204
+    assert client.get("/api/attendance/cut-date").json() is None
+    assert client.get("/api/attendance/cut-dates").json() == [a, b]
+
+    # Borrarla de las guardadas la quita de la lista (y de la aplicada si lo era).
+    assert client.put("/api/attendance/cut-date", json=b).status_code == 200
+    assert client.delete("/api/attendance/cut-dates", params=b).status_code == 204
+    assert client.get("/api/attendance/cut-dates").json() == [a]
+    assert client.get("/api/attendance/cut-date").json() is None

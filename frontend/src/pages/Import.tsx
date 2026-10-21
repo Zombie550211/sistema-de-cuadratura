@@ -1,5 +1,5 @@
 import { useRef, useState, type DragEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 import { IconFile, IconUpload } from "../components/Icons";
 import { ConfirmDelete, RowMenu } from "../components/RowMenu";
@@ -7,8 +7,9 @@ import { api, ApiError, localName, type ImportBatch, type Locales, type Page } f
 import { fmtDate, fmtDateTime } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
-export function Import() {
-  const navigate = useNavigate();
+/** Subida del archivo del reloj e historial de archivos, dentro de Marcaciones. `onChanged` avisa
+ *  que entraron o se borraron marcas; `onView` abre en Marcaciones las fechas y el local de un archivo. */
+export function ImportPanel({ onChanged, onView }: { onChanged: (batch?: ImportBatch) => void; onView: (batch: ImportBatch) => void }) {
   const input = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -28,10 +29,12 @@ export function Import() {
     form.append("file", file);
     if (localName) form.append("local", localName);
     try {
-      setResult(await api.post<ImportBatch>("/attendance/imports", form));
+      const batch = await api.post<ImportBatch>("/attendance/imports", form);
+      setResult(batch);
       setNeedsLocal(null);
       history.reload();
       locales.reload();
+      onChanged(batch);
     } catch (err) {
       const e = err as ApiError;
       if (e.status === 422 && e.message.includes("local")) setNeedsLocal(file);
@@ -50,13 +53,10 @@ export function Import() {
   }
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <h1>Importar reloj</h1>
-          <p>Suba el archivo attlog (.dat) que descarga del reloj con la USB, o las marcaciones en Excel (.xlsx o .xls). El local se reconoce solo por las huellas.</p>
-        </div>
-      </div>
+    <div className="stack" style={{ gap: 16 }}>
+      <p className="caption" style={{ marginTop: -12 }}>
+        Suba el archivo attlog (.dat) que descarga del reloj con la USB, o las marcaciones en Excel (.xlsx o .xls). El local se reconoce solo por las huellas.
+      </p>
 
       <div
         className={`dropzone${over ? " over" : ""}${busy ? " busy" : ""}`}
@@ -112,9 +112,9 @@ export function Import() {
             <Cell label="Líneas inválidas" value={result.invalid_lines} />
           </div>
           {result.date_from && result.date_to && (
-            <Link to={`/marcaciones?desde=${result.date_from}&hasta=${result.date_to}&local=${result.device.id}`} className="btn" style={{ marginTop: 16 }}>
+            <button className="btn" style={{ marginTop: 16 }} onClick={() => onView(result)}>
               Ver marcaciones de este archivo
-            </Link>
+            </button>
           )}
           {result.unknown_badges > 0 && (
             <Link to="/empleados/agentes?vincular=1" className="alert warn" style={{ display: "block", marginTop: 16 }}>
@@ -168,7 +168,7 @@ export function Import() {
                   <td className="num row-actions">
                     <RowMenu
                       actions={[
-                        { label: "Ver marcaciones", onClick: () => navigate(`/marcaciones?desde=${b.date_from}&hasta=${b.date_to}&local=${b.device.id}`) },
+                        { label: "Ver marcaciones", onClick: () => onView(b) },
                         { label: "Eliminar importación", danger: true, onClick: () => setDeleting(b) },
                       ]}
                     />
@@ -191,6 +191,7 @@ export function Import() {
             setResult(null);
             history.reload();
             locales.reload();
+            onChanged();
           }}
         >
           <p>

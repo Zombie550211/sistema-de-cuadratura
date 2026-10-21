@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { IconChevronLeft, IconChevronRight, IconX } from "../components/Icons";
+import { IconCalendar, IconChevronDown, IconChevronLeft, IconChevronRight, IconSearch, IconUpload, IconX } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { RowMenu, type RowAction } from "../components/RowMenu";
 import {
@@ -27,6 +27,7 @@ import { dayOffColor, isNoShow, NO_SHOW } from "../lib/shiftColors";
 import { addDays, fmtLongDate, fmtMinutes, fmtRange, fmtTime, fmtHms, fmtTimeSec, localDate, quincena, today } from "../lib/format";
 import { downloadBlob, tableImage, type ImageCell, type ImageColumn } from "../lib/tableImage";
 import { useAsync } from "../lib/useAsync";
+import { ImportPanel } from "./Import";
 
 interface DayRow {
   key: string;
@@ -54,6 +55,7 @@ interface PersonRow {
 }
 
 type Dialog = { kind: "edit" | "delete" | "link"; row: DayRow } | null;
+
 
 function entry(punches: Punch[]) {
   const valid = punches.filter((p) => !p.is_double_tap);
@@ -117,10 +119,16 @@ export function Punches() {
   const [params, setParams] = useSearchParams();
   const { can } = useAuth();
   const canEdit = can("admin", "rrhh");
-  // Se ve una quincena a la vez (del 1 al 15 o del 16 a fin de mes): la del último archivo subido;
-  // las demás se recorren con las flechas. Desde Importar llega ?hasta=&local= del archivo.
-  const [quin, setQuin] = useState(() => quincena(params.get("hasta") ?? params.get("desde") ?? today()));
-  const [latestQuin, setLatestQuin] = useState<[string, string] | null>(null);
+  // Cada archivo subido abre una pestaña con sus fechas (del primer al último día que trae); al
+  // entrar se ve la del último archivo. Las flechas recorren quincenas (del 1 al 15 o del 16 a fin
+  // de mes). Desde Importar llega ?desde=&hasta=&local= del archivo.
+  const [quin, setQuin] = useState<[string, string]>(() => {
+    const desde = params.get("desde");
+    const hasta = params.get("hasta");
+    return desde && hasta ? [desde, hasta] : quincena(hasta ?? desde ?? today());
+  });
+  // Importar el archivo del reloj se hace aquí mismo (antes era su propia página: /importar llega con ?importar=1).
+  const [importing, setImporting] = useState(() => canEdit && params.get("importar") === "1");
   const [search, setSearch] = useState("");
   const [showDoubles, setShowDoubles] = useState(true);
   const [openKey, setOpenKey] = useState<string | null>(null);
@@ -132,7 +140,8 @@ export function Punches() {
   // servidor, la misma para todos, y queda hasta que RRHH la cambie o la quite.
   const [cut, setCut] = useState<[string, string] | null>(null);
   const [cutError, setCutError] = useState<string | null>(null);
-  const [pickingCut, setPickingCut] = useState(false);
+  // Fechas de corte guardadas (la más reciente primero), para volver a elegirlas.
+  const [cuts, setCuts] = useState<[string, string][]>([]);
   const [from, to] = cut ?? quin;
   const periodDays = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
 
@@ -143,20 +152,40 @@ export function Punches() {
   const device = tabs.find((d) => d.id === wanted) ?? tabs[0] ?? null;
   const deviceId = device?.id ?? null;
 
-  // Sin fecha en la URL, se abre en la quincena y el local del último archivo subido.
-  useEffect(() => {
-    api
-      .get<Page<ImportBatch>>("/attendance/imports", { limit: 1 })
+  // Sin fecha en la URL, se abre en las fechas y el local del último archivo subido.
+  function loadFiles(openLast: boolean) {
+    return api
+      .get<Page<ImportBatch>>("/attendance/imports", { limit: 5 })
       .then((page) => {
-        const last = page.items[0];
-        if (!last?.date_to) return;
-        setLatestQuin(quincena(last.date_to));
-        if (params.get("hasta") || params.get("desde")) return;
-        setQuin(quincena(last.date_to));
+        const last = page.items.find((b) => b.date_from && b.date_to);
+        if (!last || !openLast) return;
+        setQuin([last.date_from!, last.date_to!]);
         setLastDevice(last.device.id);
       })
       .catch(() => {});
+  }
+  useEffect(() => {
+    loadFiles(!params.get("hasta") && !params.get("desde"));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Abre las fechas y el local de un archivo subido. */
+  function viewBatch(b: ImportBatch) {
+    if (b.date_from && b.date_to) setQuin([b.date_from, b.date_to]);
+    selectTab(b.device.id);
+  }
+
+  function closeImport() {
+    setImporting(false);
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("importar");
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
 
   const { data, error, loading, reload } = useAsync(
     () =>
@@ -179,9 +208,14 @@ export function Punches() {
   const daysOff = useAsync(() => api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: from, date_to: to }), [from, to]);
 
   function selectTab(id: number) {
-    const next = new URLSearchParams(params);
-    next.set("local", String(id));
-    setParams(next, { replace: true });
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("local", String(id));
+        return next;
+      },
+      { replace: true },
+    );
     setOpenKey(null);
   }
 
@@ -189,20 +223,42 @@ export function Punches() {
     setOpenKey(key);
   }
 
+  function loadCuts() {
+    api
+      .get<CutDate[]>("/attendance/cut-dates")
+      .then((list) => setCuts(list.map((c) => [c.date_from, c.date_to])))
+      .catch(() => {});
+  }
   useEffect(() => {
     api
       .get<CutDate | null>("/attendance/cut-date")
       .then((c) => setCut(c ? [c.date_from, c.date_to] : null))
       .catch(() => {});
+    loadCuts();
   }, []);
 
+  /** Aplica una fecha de corte (queda guardada para todos) o, con null, vuelve a ver por quincena. */
   async function saveCut(r: [string, string] | null) {
     setCutError(null);
     try {
       if (r) await api.put("/attendance/cut-date", { date_from: r[0], date_to: r[1] });
       else await api.delete("/attendance/cut-date");
       setCut(r);
-      setPickingCut(false);
+      setOpenKey(null);
+      loadCuts();
+      return true;
+    } catch (err) {
+      setCutError((err as ApiError).message);
+      return false;
+    }
+  }
+
+  async function deleteCut(r: [string, string]) {
+    setCutError(null);
+    try {
+      await api.delete(`/attendance/cut-dates?date_from=${r[0]}&date_to=${r[1]}`);
+      if (cut && cut[0] === r[0] && cut[1] === r[1]) setCut(null);
+      loadCuts();
     } catch (err) {
       setCutError((err as ApiError).message);
     }
@@ -228,83 +284,63 @@ export function Punches() {
 
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <span className="caption">Asistencia</span>
-          <h1>Marcaciones</h1>
-          <p>Toque a una persona para ver sus marcas de la quincena. Hora de El Salvador. Solo cuenta la primera marca del día (la entrada); las tachadas son dobles marcas.</p>
-        </div>
-      </div>
+    <div className="page wide pn">
+      <h1 className="sr-only">Marcaciones</h1>
 
-      {tabs.length > 0 && (
-        <div className="tabs" role="tablist" aria-label="Locales">
-          {tabs.map((d) => (
-            <button
-              key={d.id}
-              role="tab"
-              aria-selected={d.id === deviceId}
-              className={d.id === deviceId ? "active" : undefined}
-              onClick={() => selectTab(d.id)}
-              title={`Reloj ${d.serial_number}`}
-            >
-              Local {localName(d)}
-              <span className="count">{d.punches}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="card row">
-        {cut ? (
-          // Con fecha de corte guardada no se navega por quincenas: se quita con la ✕ o se cambia.
-          <div className="row" style={{ gap: 4, alignSelf: "flex-end" }}>
-            <span className="sch-week" title="Fecha de corte guardada">Corte: {fmtRange(cut)}</span>
+      <section className="pn-bar" aria-label="Periodo y local">
+        <div className="pn-row">
+          <div className="pn-group">
+            <span className="pn-label">Fecha de corte</span>
+            <CutControl cut={cut} cuts={cuts} canEdit={canEdit} error={cutError} onApply={saveCut} onDelete={deleteCut} />
           </div>
-        ) : (
-          <div className="row" style={{ gap: 4, alignSelf: "flex-end" }}>
-            <button className="icon-btn" onClick={() => setQuin(quincena(addDays(quin[0], -1)))} aria-label="Quincena anterior">
-              <IconChevronLeft width={20} height={20} />
+          {tabs.length > 0 && (
+            <div className="pn-group">
+              <span className="pn-label">Local</span>
+              <LocalPicker devices={tabs} value={deviceId} onChange={selectTab} />
+            </div>
+          )}
+          <span className="spacer" />
+          {canEdit && (
+            <button className="btn" onClick={() => setImporting(true)}>
+              <IconUpload /> Importar archivo
             </button>
-            <span className="sch-week">{fmtRange(quin)}</span>
-            <button className="icon-btn" onClick={() => setQuin(quincena(addDays(quin[1], 1)))} aria-label="Quincena siguiente">
-              <IconChevronRight width={20} height={20} />
-            </button>
-            {latestQuin && latestQuin[0] !== quin[0] && (
-              <button className="btn ghost sm" onClick={() => setQuin(latestQuin)}>
-                Último archivo
+          )}
+        </div>
+
+        <div className="pn-row pn-tools">
+          {cut ? (
+            <div className="pn-period" title="Fecha de corte guardada">
+              <span className="pn-period-label">Corte</span>
+              <b>{fmtRange(cut)}</b>
+            </div>
+          ) : (
+            <div className="pn-period">
+              <button className="icon-btn" onClick={() => setQuin(quincena(addDays(quin[0], -1)))} aria-label="Quincena anterior">
+                <IconChevronLeft width={18} height={18} />
               </button>
-            )}
-          </div>
-        )}
-        <label className="field" style={{ flex: 1, minWidth: 200 }}>
-          <span>Buscar</span>
-          <input className="input" placeholder="Nombre, código o huella" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </label>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignSelf: "flex-end" }}>
-          <label className="check">
-            <input type="checkbox" checked={showDoubles} onChange={(e) => setShowDoubles(e.target.checked)} /> Mostrar dobles marcas
+              <b>{fmtRange(quin)}</b>
+              <button className="icon-btn" onClick={() => setQuin(quincena(addDays(quin[1], 1)))} aria-label="Quincena siguiente">
+                <IconChevronRight width={18} height={18} />
+              </button>
+            </div>
+          )}
+          <label className="pn-search">
+            <span className="sr-only">Buscar</span>
+            <IconSearch width={16} height={16} aria-hidden />
+            <input className="input" placeholder="Buscar por nombre, código o huella" value={search} onChange={(e) => setSearch(e.target.value)} />
           </label>
-          <div className="row" style={{ gap: 4 }}>
-            <button
-              className={`btn sm${cut ? "" : " ghost"}`}
-              disabled={!canEdit}
-              onClick={() => setPickingCut(true)}
-              title={canEdit ? "Calcular desde una fecha de inicio hasta la fecha de corte (queda guardada para todos)" : "Solo RRHH cambia la fecha de corte"}
-            >
-              {cut ? `Corte: ${fmtRange(cut)}` : "Fecha de corte"}
-            </button>
-            {cut && canEdit && (
-              <button className="icon-btn" onClick={() => saveCut(null)} aria-label="Quitar fecha de corte" title="Quitar fecha de corte">
-                <IconX width={16} height={16} />
-              </button>
-            )}
-          </div>
+          <label className="check">
+            <input type="checkbox" checked={showDoubles} onChange={(e) => setShowDoubles(e.target.checked)} /> Dobles marcas
+          </label>
+          <button className="btn ghost sm" onClick={() => setExporting(true)} disabled={!people.length} title="Descargar la tabla del local como imagen">
+            Descargar imagen
+          </button>
         </div>
-      </div>
+      </section>
+
+      {people.length > 0 && <PeriodSummary people={people} periodDays={periodDays} lateByKey={lateByKey} daysOff={daysOff.data ?? []} lateness={late.data ?? []} />}
 
       {error && <div className="alert">{error}</div>}
-      {cutError && !pickingCut && <div className="alert">{cutError}</div>}
       {data && data.total > data.items.length && (
         <div className="alert info">Mostrando {data.items.length} de {data.total} marcas del periodo.</div>
       )}
@@ -318,16 +354,14 @@ export function Punches() {
       ) : (
         <div className="card">
           <div className="card-head">
-            <h3>Empleados</h3>
-            <div className="row" style={{ gap: 12, alignItems: "center" }}>
-              <span className="caption">{shown.length} personas</span>
-              <button className="btn ghost sm" onClick={() => setExporting(true)} title="Descargar la tabla del local como imagen">
-                Descargar imagen
-              </button>
-            </div>
+            <h2 className="pn-h2">Empleados</h2>
+            <span className="caption">
+              {shown.length} {shown.length === 1 ? "persona" : "personas"}
+              {search && ` de ${people.length}`}
+            </span>
           </div>
-          <div className="table-wrap">
-            <table className="table">
+          <div className="table-wrap pn-scroll">
+            <table className="table pn-table">
               <thead>
                 <tr>
                   <th>Empleado</th>
@@ -356,20 +390,38 @@ export function Punches() {
                     >
                       <td>
                         {p.name ? (
-                          <>
-                            <div>{p.name}</div>
-                            <div className="caption">{p.code}</div>
-                          </>
+                          <div className="pn-person">
+                            <span className="pn-avatar" aria-hidden>{initials(p.name)}</span>
+                            <span>
+                              <b>{p.name}</b>
+                              <span className="caption">{p.code}</span>
+                            </span>
+                          </div>
                         ) : (
-                          <span className="badge warn">ID {p.badge} sin empleado</span>
+                          <div className="pn-person">
+                            <span className="pn-avatar none" aria-hidden>?</span>
+                            <span>
+                              <b className="pn-unlinked">Sin empleado</b>
+                              <span className="caption">Huella {p.badge} del reloj</span>
+                            </span>
+                          </div>
                         )}
                       </td>
                       <td>
-                        <span className="badge accent" title="N° de huella (ID en el reloj)">
+                        <span className="pn-badge mono" title="N° de huella (ID en el reloj)">
                           {p.badge}
                         </span>
                       </td>
-                      <td>{p.days.length} de {periodDays}</td>
+                      <td>
+                        <div className="pn-days" title={`${p.days.length} de ${periodDays} días con marca`}>
+                          <span className="pn-days-bar" aria-hidden>
+                            <i style={{ transform: `scaleX(${Math.min(1, p.days.length / periodDays)})` }} />
+                          </span>
+                          <span className="mono">
+                            {p.days.length}/{periodDays}
+                          </span>
+                        </div>
+                      </td>
                       <td className="nowrap">
                         {ls.days === 0 ? (
                           <span className="muted">—</span>
@@ -420,13 +472,23 @@ export function Punches() {
           onClose={() => setOpenKey(null)}
         />
       )}
-      {pickingCut && (
-        <CutDatePicker
-          initial={cut ?? [quincena(today())[0], today()]}
-          error={cutError}
-          onApply={saveCut}
-          onClose={() => setPickingCut(false)}
-        />
+      {importing && (
+        <Modal title="Importar archivo del reloj" onClose={closeImport} wide>
+          <ImportPanel
+            onChanged={(batch) => {
+              locales.reload();
+              reload();
+              late.reload();
+              daysOff.reload();
+              loadFiles(false);
+              if (batch) viewBatch(batch);
+            }}
+            onView={(b) => {
+              viewBatch(b);
+              closeImport();
+            }}
+          />
+        </Modal>
       )}
       {exporting && device && (
         <DownloadImage device={device} range={[from, to]} people={people} lateness={late.data ?? []} onClose={() => setExporting(false)} />
@@ -448,6 +510,64 @@ export function Punches() {
       {dialog?.kind === "link" && <LinkBadge row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
       {dialog?.kind === "delete" && <DeleteDay row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
     </div>
+  );
+}
+
+const initials = (name: string) =>
+  name
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
+/** Resumen del local en el periodo: cuántos marcaron, cuántas huellas no tienen empleado y el total de
+ *  llegadas tarde, nocturnidad y ausencias. */
+function PeriodSummary({
+  people,
+  periodDays,
+  lateByKey,
+  daysOff,
+  lateness,
+}: {
+  people: PersonRow[];
+  periodDays: number;
+  lateByKey: Map<string, Lateness>;
+  daysOff: ShiftDayOff[];
+  lateness: Lateness[];
+}) {
+  const named = people.filter((p) => p.name);
+  const unlinked = people.length - named.length;
+  const dayCount = people.reduce((t, p) => t + p.days.length, 0);
+  const late = people.map((p) => lateSummary(p, lateByKey));
+  const lateDays = late.reduce((t, l) => t + l.days, 0);
+  const lateSeconds = late.reduce((t, l) => t + l.seconds, 0);
+  const night = people.reduce((t, p) => t + nightSummary(p, lateByKey).seconds, 0);
+  const noShow = named.reduce((t, p) => t + dayKinds(p.employeeId, daysOff, lateness).noShow.length, 0);
+  return (
+    <dl className="home-kpis pn-kpis">
+      <div className="home-kpi">
+        <dt>Personas que marcaron</dt>
+        <dd className="home-kpi-value mono">{people.length}</dd>
+        <dd className="home-kpi-note">{Math.round(dayCount / Math.max(1, periodDays))} por día en promedio</dd>
+      </div>
+      <div className="home-kpi">
+        <dt>Huellas sin empleado</dt>
+        <dd className={`home-kpi-value mono${unlinked ? " pn-warn" : ""}`}>{unlinked}</dd>
+        <dd className="home-kpi-note">{unlinked ? "Sus marcas no cuentan para nadie" : "Todas tienen empleado"}</dd>
+      </div>
+      <div className="home-kpi">
+        <dt>Llegadas tarde</dt>
+        <dd className="home-kpi-value mono">{lateDays}</dd>
+        <dd className="home-kpi-note">{lateDays ? `${fmtHms(lateSeconds)} en total` : "Sin turnos o todos a tiempo"}</dd>
+      </div>
+      <div className="home-kpi">
+        <dt>No se presentó</dt>
+        <dd className="home-kpi-value mono">{noShow}</dd>
+        <dd className="home-kpi-note">{night ? `Nocturnidad: ${fmtHms(night)}` : "Días con turno y sin marca"}</dd>
+      </div>
+    </dl>
   );
 }
 
@@ -959,57 +1079,6 @@ function DownloadImage({
   );
 }
 
-/** Calendario para elegir la fecha de inicio y la fecha de corte. */
-function CutDatePicker({
-  initial,
-  error: saveError,
-  onApply,
-  onClose,
-}: {
-  initial: [string, string];
-  error: string | null;
-  onApply: (r: [string, string]) => void;
-  onClose: () => void;
-}) {
-  const [from, setFrom] = useState(initial[0]);
-  const [to, setTo] = useState(initial[1]);
-  const days = from && to ? Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) : 0;
-  const error = !from || !to ? "Elija las dos fechas." : to < from ? "La fecha de corte no puede ser antes de la de inicio." : days > 93 ? "El rango no puede pasar de 3 meses." : null;
-
-  return (
-    <Modal title="Fecha de corte" onClose={onClose}>
-      <form
-        className="stack"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!error) onApply([from, to]);
-        }}
-      >
-        <p className="caption">Las marcas y las llegadas tarde de cada persona se calculan desde la fecha de inicio hasta la fecha de corte (incluida). Queda guardada para todos hasta que se cambie o se quite.</p>
-        <div className="row" style={{ gap: 12 }}>
-          <label className="field" style={{ flex: 1 }}>
-            <span>Fecha de inicio</span>
-            <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </label>
-          <label className="field" style={{ flex: 1 }}>
-            <span>Fecha de corte</span>
-            <input className="input" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
-          </label>
-        </div>
-        {error && from && to && <div className="alert">{error}</div>}
-        {saveError && <div className="alert">{saveError}</div>}
-        <div className="modal-foot">
-          <button type="button" className="btn ghost" onClick={onClose}>
-            Cancelar
-          </button>
-          <button className="btn" disabled={!!error}>
-            Aplicar
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
 
 /** Llegada tarde del día: minutos tarde contra el turno y cuánto de eso ya cuenta, porque en la
  *  quincena se perdonan los primeros LATE_ALLOWANCE minutos acumulados. */
@@ -1397,5 +1466,251 @@ function LinkBadge({ row, onClose, onDone }: { row: DayRow; onClose: () => void;
       </div>
       {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
     </Modal>
+  );
+}
+
+const WEEKDAYS = ["L", "M", "M", "J", "V", "S", "D"];
+const MONTH_NAMES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const spanDays = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000) + 1;
+const sameRange = (a: [string, string] | null, b: [string, string]) => !!a && a[0] === b[0] && a[1] === b[1];
+
+/** Panel que se abre debajo de su botón; se cierra al tocar fuera o con Escape. */
+function Popover({ open, onClose, children, align = "left" }: { open: boolean; onClose: () => void; children: React.ReactNode; align?: "left" | "right" }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <>
+      <div className="pop-backdrop" onClick={onClose} aria-hidden />
+      <div className={`pop pop-${align}`} role="dialog">
+        {children}
+      </div>
+    </>
+  );
+}
+
+/** Fecha de corte: muestra la aplicada; al abrirla se ven las guardadas para elegir una (o volver a
+ *  la quincena) y un calendario para marcar una nueva, del primer día al día de corte. */
+function CutControl({
+  cut,
+  cuts,
+  canEdit,
+  error,
+  onApply,
+  onDelete,
+}: {
+  cut: [string, string] | null;
+  cuts: [string, string][];
+  canEdit: boolean;
+  error: string | null;
+  onApply: (r: [string, string] | null) => Promise<boolean>;
+  onDelete: (r: [string, string]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [range, setRange] = useState<[string, string | null]>(() => [cut?.[0] ?? quincena(today())[0], cut?.[1] ?? null]);
+  const [busy, setBusy] = useState(false);
+  const close = () => setOpen(false);
+  const days = range[1] ? spanDays(range[0], range[1]) : 0;
+  const tooLong = days > 94;
+
+  async function apply(r: [string, string] | null) {
+    setBusy(true);
+    const ok = await onApply(r);
+    setBusy(false);
+    if (ok) close();
+  }
+
+  return (
+    <div className="pop-anchor">
+      <button
+        type="button"
+        className={`picker-btn${cut ? " on" : ""}`}
+        onClick={() => {
+          setRange([cut?.[0] ?? quincena(today())[0], cut?.[1] ?? null]);
+          setOpen(!open);
+        }}
+        aria-expanded={open}
+      >
+        <IconCalendar width={16} height={16} aria-hidden />
+        <span>{cut ? fmtRange(cut) : "Por quincena"}</span>
+        {cuts.length > 1 && <span className="seg-count">{cuts.length} guardadas</span>}
+        <IconChevronDown width={14} height={14} aria-hidden className="picker-caret" />
+      </button>
+      <Popover open={open} onClose={close}>
+        <div className="cut-pop">
+          <div className="cut-saved">
+            <span className="pop-title">Guardadas</span>
+            <button type="button" className={`cut-item${cut ? "" : " on"}`} disabled={!canEdit || busy} onClick={() => apply(null)}>
+              <span className="cut-radio" aria-hidden />
+              <span className="home-grow">
+                Por quincena
+                <small>Sin fecha de corte</small>
+              </span>
+            </button>
+            <div className="cut-list qscroll">
+              {cuts.map((c) => (
+                <div key={c.join("|")} className={`cut-item${sameRange(cut, c) ? " on" : ""}`}>
+                  <button type="button" className="cut-pick" disabled={!canEdit || busy} onClick={() => apply(c)}>
+                    <span className="cut-radio" aria-hidden />
+                    <span className="home-grow">
+                      {fmtRange(c)}
+                      <small>{spanDays(c[0], c[1])} días</small>
+                    </span>
+                  </button>
+                  {canEdit && (
+                    <button type="button" className="icon-btn cut-del" onClick={() => onDelete(c)} aria-label={`Borrar la fecha de corte ${fmtRange(c)}`} title="Borrar de las guardadas">
+                      <IconX width={14} height={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {!cuts.length && <p className="caption" style={{ padding: "4px 8px" }}>Todavía no hay fechas de corte guardadas.</p>}
+            </div>
+          </div>
+
+          <div className="cut-new">
+            <span className="pop-title">Nueva fecha de corte</span>
+            <RangeCalendar value={range} onChange={setRange} />
+            <div className="cut-foot">
+              <span className="cut-summary">
+                {range[1] ? (
+                  <>
+                    <b>{fmtRange([range[0], range[1]])}</b>
+                    <small className={tooLong ? "danger-text" : undefined}>{tooLong ? "Máximo 3 meses" : `${days} días`}</small>
+                  </>
+                ) : (
+                  <small>Elija el primer día y luego el día de corte</small>
+                )}
+              </span>
+              <button type="button" className="btn sm" disabled={!canEdit || !range[1] || tooLong || busy} onClick={() => range[1] && apply([range[0], range[1]])}>
+                {busy ? "Aplicando…" : "Aplicar"}
+              </button>
+            </div>
+            {error && <div className="alert">{error}</div>}
+            {!canEdit && <p className="caption">Solo RRHH cambia la fecha de corte.</p>}
+          </div>
+        </div>
+      </Popover>
+    </div>
+  );
+}
+
+/** Dos meses lado a lado para marcar un rango: primer clic el inicio, segundo clic el día de corte. */
+function RangeCalendar({ value, onChange }: { value: [string, string | null]; onChange: (r: [string, string | null]) => void }) {
+  const [month, setMonth] = useState(() => (value[1] ?? value[0]).slice(0, 7));
+  const [hover, setHover] = useState<string | null>(null);
+  const prevMonth = addDays(`${month}-01`, -1).slice(0, 7);
+  const months = [prevMonth, month];
+  const [start, end] = value;
+  const until = end ?? (hover && hover >= start ? hover : null);
+  const now = today();
+
+  function pick(d: string) {
+    if (!start || end || d < start) onChange([d, null]);
+    else onChange([start, d]);
+  }
+
+  return (
+    <div className="rc">
+      <div className="rc-nav">
+        <button type="button" className="icon-btn" onClick={() => setMonth(prevMonth)} aria-label="Mes anterior">
+          <IconChevronLeft width={16} height={16} />
+        </button>
+        <button type="button" className="icon-btn" onClick={() => setMonth(addDays(`${month}-28`, 7).slice(0, 7))} aria-label="Mes siguiente">
+          <IconChevronRight width={16} height={16} />
+        </button>
+      </div>
+      <div className="rc-months" onMouseLeave={() => setHover(null)}>
+        {months.map((m) => {
+          const lead = (new Date(`${m}-01T00:00:00Z`).getUTCDay() + 6) % 7;
+          const count = Number(addDays(`${addDays(`${m}-28`, 4).slice(0, 8)}01`, -1).slice(8));
+          return (
+            <div key={m} className="rc-month">
+              <b className="rc-title">
+                {MONTH_NAMES[Number(m.slice(5)) - 1]} {m.slice(0, 4)}
+              </b>
+              <div className="rc-grid">
+                {WEEKDAYS.map((w, i) => (
+                  <span key={i} className="rc-dow" aria-hidden>
+                    {w}
+                  </span>
+                ))}
+                {Array.from({ length: lead }, (_, i) => (
+                  <span key={`x${i}`} />
+                ))}
+                {Array.from({ length: count }, (_, i) => {
+                  const d = `${m}-${String(i + 1).padStart(2, "0")}`;
+                  const inRange = !!until && d > start && d < until;
+                  const cls = [
+                    "rc-day",
+                    d === start ? "start" : "",
+                    d === until ? "end" : "",
+                    inRange ? "in" : "",
+                    d === now ? "today" : "",
+                  ].filter(Boolean).join(" ");
+                  return (
+                    <button key={d} type="button" className={cls} onClick={() => pick(d)} onMouseEnter={() => setHover(d)} aria-label={fmtLongDate(d)} aria-pressed={d === start || d === end}>
+                      {i + 1}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Local del reloj: con varios, una lista desplegable con sus marcas; con uno solo, su nombre. */
+function LocalPicker({ devices, value, onChange }: { devices: (Device & { punches: number })[]; value: number | null; onChange: (id: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const current = devices.find((d) => d.id === value) ?? devices[0];
+  if (devices.length <= 1) {
+    return (
+      <span className="picker-btn static" title={`Reloj ${current.serial_number}`}>
+        {localName(current)}
+        <span className="seg-count">{current.punches} marcas</span>
+      </span>
+    );
+  }
+  return (
+    <div className="pop-anchor">
+      <button type="button" className="picker-btn" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="listbox">
+        <span>{localName(current)}</span>
+        <span className="seg-count">{current.punches} marcas</span>
+        <IconChevronDown width={14} height={14} aria-hidden className="picker-caret" />
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)}>
+        <ul className="local-list qscroll" role="listbox" aria-label="Locales">
+          {devices.map((d) => (
+            <li key={d.id}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={d.id === current.id}
+                className={`cut-item${d.id === current.id ? " on" : ""}`}
+                onClick={() => {
+                  onChange(d.id);
+                  setOpen(false);
+                }}
+              >
+                <span className="cut-radio" aria-hidden />
+                <span className="home-grow">
+                  Local {localName(d)}
+                  <small>Reloj {d.serial_number}</small>
+                </span>
+                <span className="seg-count">{d.punches}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </Popover>
+    </div>
   );
 }
