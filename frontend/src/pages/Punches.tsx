@@ -291,7 +291,7 @@ export function Punches() {
         <div className="pn-row">
           <div className="pn-group">
             <span className="pn-label">Fecha de corte</span>
-            <CutControl cut={cut} cuts={cuts} canEdit={canEdit} error={cutError} onApply={saveCut} onDelete={deleteCut} />
+            <CutControl cut={cut} cuts={cuts} canEdit={canEdit} error={cutError} onApply={saveCut} onDelete={deleteCut} onOpen={loadCuts} />
           </div>
           {tabs.length > 0 && (
             <div className="pn-group">
@@ -1502,6 +1502,7 @@ function CutControl({
   error,
   onApply,
   onDelete,
+  onOpen,
 }: {
   cut: [string, string] | null;
   cuts: [string, string][];
@@ -1509,6 +1510,8 @@ function CutControl({
   error: string | null;
   onApply: (r: [string, string] | null) => Promise<boolean>;
   onDelete: (r: [string, string]) => void;
+  /** Al abrir se vuelven a pedir las guardadas, por si otra persona aplicó una nueva. */
+  onOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [range, setRange] = useState<[string, string | null]>(() => [cut?.[0] ?? quincena(today())[0], cut?.[1] ?? null]);
@@ -1531,6 +1534,7 @@ function CutControl({
         className={`picker-btn${cut ? " on" : ""}`}
         onClick={() => {
           setRange([cut?.[0] ?? quincena(today())[0], cut?.[1] ?? null]);
+          if (!open) onOpen();
           setOpen(!open);
         }}
         aria-expanded={open}
@@ -1562,7 +1566,7 @@ function CutControl({
                     </span>
                   </button>
                   {canEdit && (
-                    <button type="button" className="icon-btn cut-del" onClick={() => onDelete(c)} aria-label={`Borrar la fecha de corte ${fmtRange(c)}`} title="Borrar de las guardadas">
+                    <button type="button" className="icon-btn cut-del" onClick={() => window.confirm(`¿Borrar la fecha de corte ${fmtRange(c)} de las guardadas?`) && onDelete(c)} aria-label={`Borrar la fecha de corte ${fmtRange(c)}`} title="Borrar de las guardadas">
                       <IconX width={14} height={14} />
                     </button>
                   )}

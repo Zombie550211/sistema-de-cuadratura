@@ -170,7 +170,7 @@ def list_punches(
 CUT_DATE = "marcaciones.fecha_corte"
 # Fechas de corte que RRHH ha guardado, la más reciente primero, para volver a elegirlas.
 CUT_DATES = "marcaciones.fechas_corte"
-MAX_CUT_DATES = 20
+MAX_CUT_DATES = 200
 
 
 def _saved_cuts(db: DB) -> list[dict]:
