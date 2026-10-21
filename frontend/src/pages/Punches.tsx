@@ -431,7 +431,6 @@ export function Punches() {
                               {ls.days} día{ls.days === 1 ? "" : "s"}
                             </span>
                             <div className="caption" title="Total de llegada tarde en el periodo">Total: {fmtHms(ls.seconds)}</div>
-                            {ls.counted > 0 && <div className="caption">{fmtMinutes(ls.counted)} cuentan como tarde</div>}
                           </>
                         )}
                       </td>
@@ -972,7 +971,7 @@ function DownloadImage({
             ? {
                 text: `${ls.days} día${ls.days === 1 ? "" : "s"}`,
                 badge: ls.counted ? "danger" : "plain",
-                sub: [`Total: ${fmtHms(ls.seconds)}`, ...(ls.counted ? [`${fmtMinutes(ls.counted)} cuentan como tarde`] : [])],
+                sub: [`Total: ${fmtHms(ls.seconds)}`],
               }
             : none,
           ns.days ? { text: `${ns.days} día${ns.days === 1 ? "" : "s"}`, badge: "plain", sub: [fmtHms(ns.seconds)] } : none,
@@ -1101,11 +1100,7 @@ function LateCell({ late, off }: { late?: Lateness; off?: ShiftDayOff }) {
   return (
     <td className="nowrap" title={`${turno}. Acumulado en la quincena: ${fmtMinutes(late.quincena_minutes)} (se perdonan ${LATE_ALLOWANCE}min).`}>
       <span className={`badge${counted ? " danger" : ""}`}>{fmtHms(late.late_seconds)}</span>
-      <div className="caption">
-        {counted
-          ? `${fmtMinutes(late.counted_minutes)} cuentan como tarde`
-          : `Dentro de los ${LATE_ALLOWANCE}min (${late.quincena_minutes}/${LATE_ALLOWANCE})`}
-      </div>
+      {!counted && <div className="caption">{`Dentro de los ${LATE_ALLOWANCE}min (${late.quincena_minutes}/${LATE_ALLOWANCE})`}</div>}
     </td>
   );
 }
