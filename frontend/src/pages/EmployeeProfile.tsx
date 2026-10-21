@@ -338,7 +338,7 @@ function shiftMonth(ym: string, n: number): string {
 
 /** Asigna un compensatorio: se elige cuál de los asuetos ganados (y sin usar) se da y luego, en
  *  el calendario, qué día lo descansa. La nota lleva la fecha del asueto, así queda usado. */
-function CompensatoryModal({
+export function CompensatoryModal({
   employee,
   initialMonth,
   onClose,

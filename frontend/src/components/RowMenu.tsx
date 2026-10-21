@@ -95,14 +95,14 @@ export function ConfirmDelete({
   }
 
   return (
-    <Modal title={title} onClose={onClose}>
-      <div className="stack">{children}</div>
+    <Modal title={title} onClose={onClose} small>
+      <div className="stack modal-danger">{children}</div>
       {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
       <div className="modal-foot">
         <button className="btn ghost" onClick={onClose} disabled={busy}>
           Cancelar
         </button>
-        <button className="btn danger" onClick={confirm} disabled={busy}>
+        <button className="btn danger solid" onClick={confirm} disabled={busy}>
           {busy ? "Eliminando…" : "Eliminar"}
         </button>
       </div>

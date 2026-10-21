@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, CurrentUser, Staff
@@ -94,12 +94,14 @@ def list_employees(
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
     stmt = select(Employee).outerjoin(Department, Employee.department_id == Department.id)
-    if q:
+    if q and q.strip():
         like = f"%{q.strip()}%"
+        # Por nombre, cada palabra debe aparecer en nombres + apellidos (en cualquier orden), así
+        # se encuentra al pegar el nombre completo o al buscar "Cristhian Sanchez".
+        full_name = func.concat_ws(" ", Employee.first_name, Employee.last_name)
         stmt = stmt.where(
             or_(
-                Employee.first_name.ilike(like),
-                Employee.last_name.ilike(like),
+                and_(*(full_name.ilike(f"%{word}%") for word in q.split())),
                 Employee.code.ilike(like),
                 Employee.badge_number == q.strip(),
                 Employee.dui.ilike(like),

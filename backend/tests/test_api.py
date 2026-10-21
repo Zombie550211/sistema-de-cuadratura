@@ -176,3 +176,11 @@ def test_rrhh_can_reschedule_a_shift(login):
     # moverlo a un día que ya tiene turno se rechaza
     r = client.put(f"/api/schedules/assignments/{monday['id']}", json={"work_date": "2026-10-06", "start_time": "08:00", "end_time": "17:00"})
     assert r.status_code == 409
+
+
+def test_search_by_full_name(login):
+    client = login("rrhh")
+    _employee(client, code="S-1", first_name="Cristhian Alexander", last_name="Sanchez Aparicio")
+    for q in ["CRISTHIAN ALEXANDER SANCHEZ APARICIO", "cristhian sanchez", "Aparicio Cristhian", "S-1"]:
+        assert client.get("/api/employees", params={"q": q}).json()["total"] == 1, q
+    assert client.get("/api/employees", params={"q": "Cristhian Lopez"}).json()["total"] == 0

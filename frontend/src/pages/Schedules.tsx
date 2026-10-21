@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-import { IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconSim, IconTrash } from "../components/Icons";
+import { IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconSearch, IconSim, IconTrash, IconX } from "../components/Icons";
 import { ConfirmDelete } from "../components/RowMenu";
 import { Modal } from "../components/Modal";
 import { useCollapsedTeams } from "../components/TeamGroups";
@@ -24,7 +24,7 @@ import {
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ampm, DAY_OFF_COLOR, dayOffBand, dayOffColor, isNoShow, NO_SHOW, OTHER_SHIFT, SHIFT_KINDS, shiftColor, shiftLabel } from "../lib/shiftColors";
-import { addDays, fmtDateTime, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
+import { addDays, fmtDateTime, fmtLongDate, fmtRange, fmtShortDay, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
@@ -55,6 +55,15 @@ const hourLabel = (h: number) => {
   const x = ((h % 24) + 24) % 24;
   return `${x === 0 ? 12 : x > 12 ? x - 12 : x}${x < 12 ? "a" : "p"}`;
 };
+
+const initials = (name: string) =>
+  name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase();
 
 /** Texto negro o blanco según qué se lea mejor sobre el color del turno. */
 function readableOn(hex: string) {
@@ -178,7 +187,8 @@ export function Schedules({ area }: { area: Area }) {
 
   function openPop(ev: MouseEvent, e: Employee) {
     if (!canEdit) return;
-    const top = ev.clientY + 520 > window.innerHeight ? Math.max(8, ev.clientY - 520) : ev.clientY + 12;
+    // Junto al clic, pero subiendo lo necesario para que la ventana (~720 px) quepa en pantalla.
+    const top = Math.max(8, Math.min(ev.clientY + 12, window.innerHeight - 728));
     setError(null);
     setPop({
       employee: e,
@@ -187,7 +197,7 @@ export function Schedules({ area }: { area: Area }) {
       current: byKey.get(`${e.id}|${day}`),
       dayOff: offByKey.get(`${e.id}|${day}`),
       top,
-      left: Math.min(ev.clientX, window.innerWidth - 320),
+      left: Math.min(ev.clientX, window.innerWidth - 396),
     });
   }
 
@@ -259,317 +269,429 @@ export function Schedules({ area }: { area: Area }) {
   const sync = lastSync.data?.items[0];
   const activeTemplates = (templates.data ?? []).filter((t) => t.is_active);
   const popTemplate = pop?.current ? templateOf(pop.current) : undefined;
+  const popOffKey = pop?.dayOff && (isNoShow(pop.dayOff) ? "no_show" : pop.dayOff.kind);
   let lastSection: string | null = null;
 
+  // Resumen del día elegido para los indicadores de arriba.
+  const onShift = visible.filter((e) => byKey.has(`${e.id}|${day}`));
+  const dayOffs = visible.map((e) => offByKey.get(`${e.id}|${day}`)).filter((d): d is ShiftDayOff => !!d);
+  const offCounts = dayOffs.reduce((m, d) => {
+    const label = isNoShow(d) ? NO_SHOW.label : DAY_OFF_LABEL[d.kind];
+    return m.set(label, (m.get(label) ?? 0) + 1);
+  }, new Map<string, number>());
+  const marks = onShift.map((e) => mark(e, byKey.get(`${e.id}|${day}`)));
+  const punched = onShift.filter((e) => firstPunch.has(e.id)).length;
+  const lateCount = marks.filter((m) => m.text.endsWith("· tarde")).length;
+  const missing = marks.filter((m) => m.text === "Sin marcación").length;
+  const weekTotal = visible.reduce((s, e) => s + weekHours(e), 0);
+  const overLimit = visible.filter((e) => weekHours(e) > WEEK_LIMIT_HOURS).length;
+  const todayIndex = (new Date(`${today()}T00:00:00Z`).getUTCDay() + 6) % 7;
+  const onToday = start === weekStart(today()) && dayIndex === todayIndex;
+
   return (
-    <div className="page sch">
-      <div className="sch-head">
-        <div className="sch-kicker">Horarios · {section}</div>
-        {sync && (
-          <span className={`caption${sync.status === "ok" ? "" : " sch-warn"}`}>
-            Última actualización del CRM: {fmtDateTime(sync.received_at)}
-            {sync.status !== "ok" && ` · ${sync.status}`}
-          </span>
-        )}
-        <button
-          className="btn ghost sm"
-          onClick={() => {
-            setStart(weekStart(today()));
-            setDayIndex((new Date(`${today()}T00:00:00Z`).getUTCDay() + 6) % 7);
-          }}
-        >
-          Hoy
-        </button>
-      </div>
+    <div className="page wide sch">
+      <h1 className="sr-only">Horarios · {section}</h1>
 
-      {/* KPIs: personas en turno por día de la semana elegida; las flechas cambian de semana. */}
-      <div className="sch-days">
-        <button className="icon-btn sch-arrow" onClick={() => setStart(addDays(start, -7))} aria-label="Semana anterior">
-          <IconChevronLeft width={20} height={20} />
-        </button>
-        {days.map((d, i) => {
-          const on = visible.filter((e) => byKey.has(`${e.id}|${d}`)).length;
-          return (
-            <button key={d} className={`sch-day${i === dayIndex ? " on" : ""}`} onClick={() => setDayIndex(i)}>
-              <span className="sch-day-top">
-                <b>
-                  {DOW[i]} {d.slice(8)} <span className="sch-day-month">{MONTH_ABBR[Number(d.slice(5, 7)) - 1]}</span>
-                </b>
-                {d === today() && <i>Hoy</i>}
-              </span>
-              <span className="caption">{on} en turno</span>
+      <section className="pn-bar" aria-label="Semana y filtros">
+        <div className="pn-row">
+          <div className="pn-group">
+            <span className="pn-label">Semana</span>
+            <div className="pn-period">
+              <button className="icon-btn" onClick={() => setStart(addDays(start, -7))} aria-label="Semana anterior">
+                <IconChevronLeft width={18} height={18} />
+              </button>
+              <b>{fmtRange([days[0], days[6]])}</b>
+              <button className="icon-btn" onClick={() => setStart(addDays(start, 7))} aria-label="Semana siguiente">
+                <IconChevronRight width={18} height={18} />
+              </button>
+            </div>
+            <button
+              className="btn ghost sm"
+              disabled={onToday}
+              onClick={() => {
+                setStart(weekStart(today()));
+                setDayIndex(todayIndex);
+              }}
+            >
+              Hoy
             </button>
-          );
-        })}
-        <button className="icon-btn sch-arrow" onClick={() => setStart(addDays(start, 7))} aria-label="Semana siguiente">
-          <IconChevronRight width={20} height={20} />
-        </button>
-      </div>
-
-      {/* Una sola barra: filtros y acciones. */}
-      <div className="sch-toolbar">
-        <div className="spacer" />
-        <select className="input" style={{ width: 200 }} value={team} onChange={(e) => setTeam(e.target.value)} aria-label="Filtrar por team">
-          <option value="all">Todos los teams</option>
-          {allGroups.map((g) => (
-            <option key={g.key} value={g.key}>
-              {g.label}
-            </option>
-          ))}
-        </select>
-        <input className="input" style={{ width: 200 }} placeholder="Buscar persona o ID" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <button className="btn ghost" onClick={() => setTemplatesOpen(true)}>
-          Turnos base
-        </button>
-        {canEdit && (
-          <button className="btn" onClick={() => setAssigning(true)} disabled={!employees.data?.items.length}>
-            <IconPlus /> Asignar horario
+          </div>
+          <div className="pn-group">
+            <span className="pn-label">Team</span>
+            <select className="input sch-team-select" value={team} onChange={(e) => setTeam(e.target.value)} aria-label="Filtrar por team">
+              <option value="all">Todos los teams</option>
+              {allGroups.map((g) => (
+                <option key={g.key} value={g.key}>
+                  {g.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <span className="spacer" />
+          <button className="btn ghost" onClick={() => setTemplatesOpen(true)}>
+            Turnos base
           </button>
-        )}
-      </div>
+          {canEdit && (
+            <button className="btn" onClick={() => setAssigning(true)} disabled={!employees.data?.items.length}>
+              <IconPlus /> Asignar horario
+            </button>
+          )}
+        </div>
 
-      <div className="sch-legend">
-        {SHIFT_KINDS.filter((k) => !k.short).map((k) => (
-          <span key={k.label}>
-            <span className="swatch" style={{ background: k.color, borderRadius: 4 }} /> {k.label}
-          </span>
-        ))}
-        <span>
-          <span className="swatch" style={{ background: OTHER_SHIFT.color, borderRadius: 4 }} /> {OTHER_SHIFT.label}
-        </span>
-        {(
-          [
-            ["Libre", DAY_OFF_COLOR.libre],
-            ["Vacaciones", DAY_OFF_COLOR.vacacion],
-            ["Incapacidad", DAY_OFF_COLOR.incapacidad],
-            ["Suspendido", DAY_OFF_COLOR.suspendido],
-            ["De baja", DAY_OFF_COLOR.baja],
-            [NO_SHOW.label, NO_SHOW.color],
-          ] as const
-        ).map(([label, color]) => (
-          <span key={label}>
-            <span className="swatch" style={{ background: color, borderRadius: 4 }} /> {label}
-          </span>
-        ))}
-        <span>
-          <span className="sch-hatch" /> Descanso (ubicación referencial)
-        </span>
-        {canEdit && <span>Clic en una fila para asignar el turno del día</span>}
-      </div>
+        {/* Los 7 días de la semana: cuántos tienen turno y una barra con la proporción. */}
+        <div className="pn-row sch-dayrow">
+          <div className="sch-days" role="tablist" aria-label="Día">
+            {days.map((d, i) => {
+              const on = visible.filter((e) => byKey.has(`${e.id}|${d}`)).length;
+              return (
+                <button key={d} role="tab" aria-selected={i === dayIndex} className={`sch-day${i === dayIndex ? " on" : ""}`} onClick={() => setDayIndex(i)}>
+                  <span className="sch-day-top">
+                    <span>
+                      {DOW[i]} <b>{Number(d.slice(8))}</b> <span className="sch-day-month">{MONTH_ABBR[Number(d.slice(5, 7)) - 1].toLowerCase()}</span>
+                    </span>
+                    {d === today() && <span className="sch-day-today">Hoy</span>}
+                  </span>
+                  <span className="sch-day-meter" aria-hidden>
+                    <i style={{ transform: `scaleX(${visible.length ? on / visible.length : 0})` }} />
+                  </span>
+                  <span className="sch-day-count">{on} en turno</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      <dl className="home-kpis sch-kpis">
+        <div className="home-kpi">
+          <dt>En turno · {fmtShortDay(day)}</dt>
+          <dd className="home-kpi-value mono">{onShift.length}</dd>
+          <dd className="home-kpi-note">
+            de {visible.length} personas · {visible.length - onShift.length - dayOffs.length} sin turno
+          </dd>
+        </div>
+        <div className="home-kpi">
+          <dt>Marcaron</dt>
+          <dd className="home-kpi-value mono">{isFuture ? "—" : punched}</dd>
+          <dd className={`home-kpi-note${!isFuture && (lateCount || missing) ? " sch-note-warn" : ""}`}>
+            {isFuture ? "El día todavía no llega" : `${lateCount} tarde · ${missing} sin marcación`}
+          </dd>
+        </div>
+        <div className="home-kpi">
+          <dt>Libres y ausencias</dt>
+          <dd className="home-kpi-value mono">{dayOffs.length}</dd>
+          <dd className="home-kpi-note">
+            {dayOffs.length
+              ? [...offCounts]
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([label, n]) => `${n} ${label.toLowerCase()}`)
+                  .join(" · ")
+              : "Nadie libre ni ausente"}
+          </dd>
+        </div>
+        <div className="home-kpi">
+          <dt>Horas en la semana</dt>
+          <dd className="home-kpi-value mono">{fmtHours(weekTotal)}</dd>
+          <dd className={`home-kpi-note${overLimit ? " sch-note-warn" : ""}`}>
+            {overLimit ? `${overLimit} ${overLimit === 1 ? "persona pasa" : "personas pasan"} de ${WEEK_LIMIT_HOURS} h` : `Nadie pasa de ${WEEK_LIMIT_HOURS} h`}
+          </dd>
+        </div>
+      </dl>
 
       {(assignments.error || punches.error) && <div className="alert">{assignments.error || punches.error}</div>}
 
-      <div className="sch-scroll">
-        <div className={`sch-board${canEdit ? " can-delete" : ""}`}>
-          <div className="sch-grid sch-hist-row">
-            <div className="sch-hist-label">
-              <b>Personas en turno por hora</b>
-              {thin.length > 0 && visible.length > 0 && (
-                <span className="sch-warn">
-                  Menos de {MIN_COVERAGE}: {thin.map(hourLabel).join(", ")}
+      <div className="card sch-card">
+        <div className="sch-card-head">
+          <div className="sch-card-title">
+            <h2 className="pn-h2">Turnos del {fmtLongDate(day).toLowerCase()}</h2>
+            <span className="caption">
+              {canEdit ? "Clic en la línea de una persona para asignar o cambiar el turno del día." : "Turnos del día por team."}
+              {sync && (
+                <span className={sync.status === "ok" ? undefined : "sch-note-warn"}>
+                  {" "}
+                  Última actualización del CRM: {fmtDateTime(sync.received_at)}
+                  {sync.status !== "ok" && ` · ${sync.status}`}.
                 </span>
               )}
-            </div>
-            <div className="sch-hist">
-              {coverage.map((v, k) => (
-                <div key={k} className={`sch-hist-col${v < MIN_COVERAGE ? " thin" : ""}`}>
-                  <span>{v}</span>
-                  <div style={{ height: `${Math.max(4, (v / maxCoverage) * 100 - 24)}%` }} />
-                </div>
-              ))}
-            </div>
-            <div />
-            {canEdit && <div />}
+            </span>
           </div>
+          <label className="pn-search sch-search">
+            <span className="sr-only">Buscar</span>
+            <IconSearch width={16} height={16} aria-hidden />
+            <input className="input" placeholder="Buscar persona o ID de reloj" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </label>
+        </div>
 
-          <div className="sch-grid sch-head">
-            <span>Persona · marcación</span>
-            <div className="sch-hours">
-              {hours.map((h) => (
-                <span key={h}>{hourLabel(h)}</span>
-              ))}
-            </div>
-            <div className="sch-head-week">
-              <span>Semana</span>
-              <span>Horas</span>
-            </div>
-            {canEdit && <span />}
-          </div>
+        <div className="sch-legend">
+          <span className="sch-legend-title">Turnos</span>
+          {[...SHIFT_KINDS.filter((k) => !k.short), OTHER_SHIFT].map((k) => (
+            <span key={k.label}>
+              <i style={{ background: k.color }} /> {k.label}
+            </span>
+          ))}
+          <span className="sch-legend-title">Días</span>
+          {(
+            [
+              ["Libre", DAY_OFF_COLOR.libre],
+              ["Vacaciones", DAY_OFF_COLOR.vacacion],
+              ["Incapacidad", DAY_OFF_COLOR.incapacidad],
+              ["Suspendido", DAY_OFF_COLOR.suspendido],
+              ["De baja", DAY_OFF_COLOR.baja],
+              [NO_SHOW.label, NO_SHOW.color],
+            ] as const
+          ).map(([label, color]) => (
+            <span key={label}>
+              <i style={{ background: color }} /> {label}
+            </span>
+          ))}
+          <span>
+            <i className="sch-hatch" /> Descanso
+          </span>
+        </div>
 
-          {groups.map((g) => {
-            const section = g.section;
-            const showSection = section !== null && section !== lastSection;
-            lastSection = section;
-            const open = teams.isOpen(g.key);
-            const teamHours = g.items.reduce((s, e) => s + weekHours(e), 0);
-            const noShift = g.items.filter((e) => !byKey.has(`${e.id}|${day}`)).length;
-            const SectionIcon = section === "lineas" ? IconSim : IconHouse;
-            return (
-              <Fragment key={g.key}>
-                {showSection && (
-                  <div className="sch-section">
-                    <SectionIcon width={14} height={14} /> {SECTION_LABEL[section]}
-                  </div>
+        <div className="sch-scroll">
+          <div className={`sch-board${canEdit ? " can-delete" : ""}`}>
+            {/* Personas en turno por hora, alineadas con la línea de tiempo de abajo. */}
+            <div className="sch-grid sch-cov">
+              <div className="sch-cov-label">
+                <b>Personas en turno por hora</b>
+                {thin.length > 0 && visible.length > 0 ? (
+                  <span className="sch-note-warn">
+                    Menos de {MIN_COVERAGE}: {thin.map(hourLabel).join(", ")}
+                  </span>
+                ) : (
+                  <span className="caption">Todas las horas con {MIN_COVERAGE} o más</span>
                 )}
-                <section className="sch-team">
-                  <div className="sch-team-head">
-                    <button className={`sch-team-toggle${open ? "" : " closed"}`} onClick={() => teams.toggle(g.key)} aria-expanded={open}>
-                      <IconChevronDown width={14} height={14} />
-                      <span>{g.label}</span>
-                    </button>
-                    <span className="muted">
-                      {g.items.length} agente{g.items.length === 1 ? "" : "s"} · {fmtHours(teamHours)} semana
-                    </span>
-                    {noShift > 0 && <span className="caption">{noShift} sin turno este día</span>}
+              </div>
+              <div className="sch-hist">
+                {coverage.map((v, k) => (
+                  <div key={k} className={`sch-hist-col${v < MIN_COVERAGE ? " thin" : ""}`} title={`${hourLabel(hours[k])}: ${v} en turno`}>
+                    <span>{v}</span>
+                    <div style={{ height: `${Math.max(4, (v / maxCoverage) * 100 - 24)}%` }} />
                   </div>
-                  {open &&
-                    g.items.map((e) => {
-                      const a = byKey.get(`${e.id}|${day}`);
-                      const m = mark(e, a);
-                      const total = weekHours(e);
-                      return (
-                        <div key={e.id} className="sch-grid sch-row">
-                          <div className="sch-agent">
-                            <Link to={`/empleados/${e.id}`} className="sch-name">
-                              {e.full_name}
-                            </Link>
-                            <div className={m.warn ? "sch-warn" : "caption"}>
-                              {e.is_supervisor && <span className="badge accent sup-tag">Supervisor</span>}
-                              {m.text}
-                            </div>
-                          </div>
-                          <div
-                            className={`sch-track${canEdit ? " editable" : ""}`}
-                            style={{ backgroundSize: `calc(100% / ${span}) 100%` }}
-                            onClick={(ev) => openPop(ev, e)}
-                            role={canEdit ? "button" : undefined}
-                            aria-label={canEdit ? `Asignar turno a ${e.full_name}` : undefined}
-                          >
-                            {a ? (
-                              <ShiftBar a={a} day={day} h0={h0} span={span} color={colorOf(a)} template={templateOf(a)} />
-                            ) : offByKey.has(`${e.id}|${day}`) ? (
-                              // Franja de color como en el CRM; el origen y la nota, en el title.
-                              <span
-                                className="sch-empty sch-off"
-                                style={{
-                                  background: dayOffBand(offByKey.get(`${e.id}|${day}`)!).bg,
-                                  color: dayOffBand(offByKey.get(`${e.id}|${day}`)!).fg,
-                                  boxShadow: `inset 3px 0 0 ${dayOffColor(offByKey.get(`${e.id}|${day}`)!)}`,
-                                }}
-                                title={[
-                                  offByKey.get(`${e.id}|${day}`)!.source === "crm" ? "Marcado en el CRM" : "Fijado por RRHH",
-                                  offByKey.get(`${e.id}|${day}`)!.notes,
-                                  canEdit ? "clic para cambiar" : null,
-                                ].filter(Boolean).join(" · ")}
-                              >
-                                {isNoShow(offByKey.get(`${e.id}|${day}`)!) ? NO_SHOW.label : DAY_OFF_LABEL[offByKey.get(`${e.id}|${day}`)!.kind]}
+                ))}
+              </div>
+              <div />
+              {canEdit && <div />}
+            </div>
+
+            <div className="sch-grid sch-colhead">
+              <span>Persona</span>
+              <div className="sch-hours">
+                {hours.map((h) => (
+                  <span key={h}>{hourLabel(h)}</span>
+                ))}
+              </div>
+              <div className="sch-colhead-week">
+                <span>Semana</span>
+                <span>Horas</span>
+              </div>
+              {canEdit && <span />}
+            </div>
+
+            {groups.map((g) => {
+              const section = g.section;
+              const showSection = section !== null && section !== lastSection;
+              lastSection = section;
+              const open = teams.isOpen(g.key);
+              const teamHours = g.items.reduce((s, e) => s + weekHours(e), 0);
+              const noShift = g.items.filter((e) => !byKey.has(`${e.id}|${day}`) && !offByKey.has(`${e.id}|${day}`)).length;
+              const SectionIcon = section === "lineas" ? IconSim : IconHouse;
+              return (
+                <Fragment key={g.key}>
+                  {showSection && (
+                    <div className="sch-section">
+                      <SectionIcon width={14} height={14} /> {SECTION_LABEL[section]}
+                    </div>
+                  )}
+                  <section className="sch-team">
+                    <button className={`sch-team-head${open ? "" : " closed"}`} onClick={() => teams.toggle(g.key)} aria-expanded={open}>
+                      <IconChevronDown width={16} height={16} className="sch-team-caret" />
+                      <b>{g.label}</b>
+                      <span className="caption">
+                        {g.items.length} {g.items.length === 1 ? "persona" : "personas"} · {fmtHours(teamHours)} en la semana
+                      </span>
+                      {noShift > 0 && <span className="sch-chip">{noShift} sin turno</span>}
+                    </button>
+                    {open &&
+                      g.items.map((e) => {
+                        const a = byKey.get(`${e.id}|${day}`);
+                        const off = offByKey.get(`${e.id}|${day}`);
+                        const m = mark(e, a);
+                        const total = weekHours(e);
+                        return (
+                          <div key={e.id} className="sch-grid sch-row">
+                            <div className="sch-agent">
+                              <span className="pn-avatar" aria-hidden>
+                                {initials(e.full_name)}
                               </span>
-                            ) : (
-                              <span className="sch-empty">Sin turno</span>
+                              <span className="sch-agent-text">
+                                <Link to={`/empleados/${e.id}`} className="sch-name" title={e.full_name}>
+                                  {e.full_name}
+                                </Link>
+                                <span className={`sch-mark${m.warn ? " warn" : ""}`}>
+                                  {e.is_supervisor && <span className="sch-sup">Supervisor</span>}
+                                  {m.text}
+                                </span>
+                              </span>
+                            </div>
+                            <div
+                              className={`sch-track${canEdit ? " editable" : ""}`}
+                              style={{ backgroundSize: `calc(100% / ${span}) 100%` }}
+                              onClick={(ev) => openPop(ev, e)}
+                              role={canEdit ? "button" : undefined}
+                              aria-label={canEdit ? `Asignar turno a ${e.full_name}` : undefined}
+                            >
+                              {a ? (
+                                <ShiftBar a={a} day={day} h0={h0} span={span} color={colorOf(a)} template={templateOf(a)} />
+                              ) : off ? (
+                                // Franja de color como en el CRM; el origen y la nota, en el title.
+                                <span
+                                  className="sch-empty sch-off"
+                                  style={{ background: dayOffBand(off).bg, color: dayOffBand(off).fg, boxShadow: `inset 3px 0 0 ${dayOffColor(off)}` }}
+                                  title={[off.source === "crm" ? "Marcado en el CRM" : "Fijado por RRHH", off.notes, canEdit ? "clic para cambiar" : null]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                >
+                                  {isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]}
+                                </span>
+                              ) : (
+                                <span className="sch-empty">Sin turno</span>
+                              )}
+                            </div>
+                            <div className="sch-weekcol">
+                              <div className="sch-squares">
+                                {days.map((d, i) => {
+                                  const wa = byKey.get(`${e.id}|${d}`);
+                                  const woff = offByKey.get(`${e.id}|${d}`);
+                                  const offLabel = woff && (isNoShow(woff) ? NO_SHOW.label : DAY_OFF_LABEL[woff.kind]);
+                                  return (
+                                    <span
+                                      key={d}
+                                      title={`${DOW[i]}: ${wa ? `${fmtTime(wa.start_at)}–${fmtTime(wa.end_at)}` : woff ? `${offLabel} (${woff.source === "crm" ? "CRM" : "RRHH"})` : "Sin turno"}`}
+                                      className={`${wa || woff ? "" : "none"}${i === dayIndex ? " sel" : ""}`}
+                                      style={wa ? { background: colorOf(wa) } : woff ? { background: dayOffColor(woff) } : undefined}
+                                    />
+                                  );
+                                })}
+                              </div>
+                              <b className={total > WEEK_LIMIT_HOURS ? "sch-note-warn" : total ? "" : "muted"}>{fmtHours(total)}</b>
+                            </div>
+                            {canEdit && (
+                              <button className="icon-btn sch-del" onClick={() => setDeleting(e)} aria-label={`Eliminar a ${e.full_name}`} title="Eliminar empleado">
+                                <IconTrash width={16} height={16} />
+                              </button>
                             )}
                           </div>
-                          <div className="sch-weekcol">
-                            <div className="sch-squares">
-                              {days.map((d, i) => {
-                                const wa = byKey.get(`${e.id}|${d}`);
-                                const off = offByKey.get(`${e.id}|${d}`);
-                                const offLabel = off && (isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]);
-                                return (
-                                  <span
-                                    key={d}
-                                    title={`${DOW[i]}: ${wa ? `${fmtTime(wa.start_at)}–${fmtTime(wa.end_at)}` : off ? `${offLabel} (${off.source === "crm" ? "CRM" : "RRHH"})` : "Sin turno"}`}
-                                    className={`${wa || off ? "" : "none"}${i === dayIndex ? " sel" : ""}`}
-                                    style={wa ? { background: colorOf(wa) } : off ? { background: dayOffColor(off) } : undefined}
-                                  />
-                                );
-                              })}
-                            </div>
-                            <b className={total > WEEK_LIMIT_HOURS ? "sch-warn" : total ? "" : "muted"}>{fmtHours(total)}</b>
-                          </div>
-                          {canEdit && (
-                            <button className="icon-btn sch-del" onClick={() => setDeleting(e)} aria-label={`Eliminar a ${e.full_name}`} title="Eliminar empleado">
-                              <IconTrash width={16} height={16} />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                </section>
-              </Fragment>
-            );
-          })}
-          {employees.data && visible.length === 0 && (
-            <div className="empty">{employees.data.items.length ? "Ningún agente coincide con el filtro." : "Registre empleados para poder asignarles horarios."}</div>
-          )}
+                        );
+                      })}
+                  </section>
+                </Fragment>
+              );
+            })}
+            {employees.data && visible.length === 0 && (
+              <div className="empty">{employees.data.items.length ? "Nadie coincide con el filtro." : "Registre empleados para poder asignarles horarios."}</div>
+            )}
+          </div>
         </div>
       </div>
 
       {pop && (
         <>
           <div className="sch-pop-backdrop" onClick={() => setPop(null)} />
-          <div className="sch-pop" style={{ top: pop.top, left: pop.left, maxHeight: `calc(100vh - ${pop.top + 8}px)` }} role="dialog" aria-label="Asignar turno">
-            <div className="caption sch-pop-title">
-              {pop.employee.full_name} · {DOW[pop.dayIndex]} {pop.day.slice(8)}
+          <div className="sch-pop" style={{ top: pop.top, left: pop.left, maxHeight: `calc(100vh - ${pop.top + 8}px)` }} role="dialog" aria-label={`Turno de ${pop.employee.full_name}`}>
+            <div className="sch-pop-head">
+              <span className="pn-avatar" aria-hidden>
+                {initials(pop.employee.full_name)}
+              </span>
+              <span className="sch-pop-who">
+                <b>{pop.employee.full_name}</b>
+                <span className="caption">
+                  {fmtLongDate(pop.day)} ·{" "}
+                  {pop.current
+                    ? `${fmtTime(pop.current.start_at)}–${fmtTime(pop.current.end_at)}`
+                    : pop.dayOff
+                      ? isNoShow(pop.dayOff)
+                        ? NO_SHOW.label
+                        : DAY_OFF_LABEL[pop.dayOff.kind]
+                      : "Sin turno"}
+                </span>
+              </span>
+              <button className="icon-btn" onClick={() => setPop(null)} aria-label="Cerrar">
+                <IconX width={16} height={16} />
+              </button>
             </div>
             {error && <div className="alert">{error}</div>}
-            {activeTemplates.map((t) => (
-              <button key={t.id} className={`sch-pop-item${popTemplate?.id === t.id ? " on" : ""}`} disabled={busy} onClick={() => applyTemplate(t, [pop.dayIndex])}>
-                <span className="row" style={{ gap: 8 }}>
-                  <span className="swatch" style={{ background: shiftColor(hhmm(t.start_time), hhmm(t.end_time)), borderRadius: 4 }} />
-                  {t.name}
-                </span>
-                <span className="caption">
-                  {hhmm(t.start_time)}–{hhmm(t.end_time)}
-                  {t.break_minutes ? ` · ${t.break_minutes} min desc.` : ""}
-                </span>
-              </button>
-            ))}
-            {activeTemplates.length === 0 && <div className="caption sch-pop-title">Cree un turno base para asignarlo con un clic.</div>}
-            <ShiftEditor
-              key={`${pop.employee.id}|${pop.day}`}
-              current={pop.current}
-              day={pop.day}
-              busy={busy}
-              onSave={saveCustom}
-            />
-            {pop.current?.source === "crm" && (
-              <div className="caption sch-pop-note">
-                Este turno vino del CRM. Lo que cambie aquí (horas, reagendar, quitar o dar el día libre) también se cambia en el horario del CRM.
-              </div>
-            )}
-            {pop.dayOff && (
-              <div className="caption sch-pop-note">
-                {DAY_OFF_LABEL[pop.dayOff.kind]} {pop.dayOff.source === "crm" ? "marcado en el CRM" : "fijado por RRHH"}
-                {pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. Está igual en los dos horarios; asignar un turno lo quita en ambos.
-              </div>
-            )}
-            <div className="sch-pop-foot">
+
+            <div className="sch-pop-sec">
+              <span className="sch-pop-label">Turno base</span>
+              {activeTemplates.length ? (
+                <div className="sch-pop-grid">
+                  {activeTemplates.map((t) => (
+                    <button key={t.id} className={`sch-pop-tpl${popTemplate?.id === t.id ? " on" : ""}`} disabled={busy} title={t.name} onClick={() => applyTemplate(t, [pop.dayIndex])}>
+                      <i style={{ background: shiftColor(hhmm(t.start_time), hhmm(t.end_time)) }} />
+                      <span>
+                        <b>{t.name}</b>
+                        <small>
+                          {hhmm(t.start_time)}–{hhmm(t.end_time)}
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <span className="caption">Cree un turno base para asignarlo con un clic.</span>
+              )}
               {popTemplate && (
-                <button className="btn ghost sm" disabled={busy} onClick={() => applyTemplate(popTemplate, [0, 1, 2, 3, 4, 5])}>
-                  Aplicar {popTemplate.name} a Lun–Sáb
-                </button>
-              )}
-              {pop.current && (
-                <button className="btn ghost sm" disabled={busy} onClick={clearDay}>
-                  Quitar turno del día
-                </button>
-              )}
-              {POP_DAY_OFF.filter((o) => o.key !== (pop.dayOff && (isNoShow(pop.dayOff) ? "no_show" : pop.dayOff.kind))).map((o) => (
-                <button key={o.key} className="btn ghost sm" disabled={busy} onClick={() => giveDayOff(o)}>
-                  <span className="swatch" style={{ background: o.color, borderRadius: 4, marginRight: 6 }} />
-                  {o.label}
-                </button>
-              ))}
-              {pop.dayOff && (
-                <button className="btn ghost sm" disabled={busy} onClick={removeDayOff}>
-                  Quitar {(isNoShow(pop.dayOff) ? NO_SHOW.label : DAY_OFF_LABEL[pop.dayOff.kind]).toLowerCase()}
+                <button className="btn ghost sm sch-pop-wide" disabled={busy} onClick={() => applyTemplate(popTemplate, [0, 1, 2, 3, 4, 5])}>
+                  Aplicar {popTemplate.name} de lunes a sábado
                 </button>
               )}
             </div>
+
+            <ShiftEditor key={`${pop.employee.id}|${pop.day}`} current={pop.current} day={pop.day} busy={busy} onSave={saveCustom} />
+
+            <div className="sch-pop-sec">
+              <span className="sch-pop-label">Marcar el día como</span>
+              <div className="sch-pop-chips">
+                {POP_DAY_OFF.map((o) => {
+                  const on = o.key === popOffKey;
+                  return (
+                    <button
+                      key={o.key}
+                      className={`sch-pop-chip${on ? " on" : ""}`}
+                      aria-pressed={on}
+                      disabled={busy}
+                      title={on ? `Quitar ${o.label.toLowerCase()}` : undefined}
+                      onClick={() => (on ? removeDayOff() : giveDayOff(o))}
+                    >
+                      <i style={{ background: o.color }} />
+                      {o.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {pop.dayOff && (
+                <span className="caption">
+                  {pop.dayOff.source === "crm" ? "Marcado en el CRM" : "Fijado por RRHH"}
+                  {pop.dayOff.notes ? ` · ${pop.dayOff.notes}` : ""}. Clic otra vez para quitarlo; asignar un turno también lo quita en los dos horarios.
+                </span>
+              )}
+            </div>
+
+            {pop.current?.source === "crm" && (
+              <div className="sch-pop-note">Este turno vino del CRM. Lo que cambie aquí (horas, reagendar, quitar o dar el día libre) también se cambia en el horario del CRM.</div>
+            )}
+            {pop.current && (
+              <div className="sch-pop-foot">
+                <button className="btn ghost sm danger" disabled={busy} onClick={clearDay}>
+                  <IconTrash width={14} height={14} /> Quitar turno del día
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
-
       {assigning && (
         <AssignModal
           employees={employees.data?.items ?? []}
@@ -625,8 +747,8 @@ function ShiftEditor({ current, day, busy, onSave }: { current?: ShiftAssignment
   };
   const moving = !!current && f.date !== day;
   return (
-    <form className="sch-pop-form" onSubmit={submit}>
-      <div className="caption">{current ? "Reagendar: otra fecha u otras horas" : "Horario personalizado"}</div>
+    <form className="sch-pop-sec sch-pop-form" onSubmit={submit}>
+      <span className="sch-pop-label">{current ? "Reagendar: otra fecha u otras horas" : "Horario personalizado"}</span>
       {current && (
         <label>
           <span className="caption">Fecha</span>
@@ -814,43 +936,60 @@ export function AssignModal({
     }
   }
 
+  const modeLabel = mode === "turno" ? "turno" : mode === "compensatorio" ? "día compensatorio" : DAY_OFF_LABEL[mode].toLowerCase();
+  const dayCount = from && to && to >= from ? Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1 : 0;
+
   return (
-    <Modal title="Asignar horario" onClose={onClose}>
+    <Modal
+      title="Asignar horario"
+      subtitle="Elija qué asignar, a quiénes y en qué fechas. Se aplica también en el horario del CRM."
+      onClose={onClose}
+    >
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <div className="chips" role="radiogroup" aria-label="Qué asignar">
-          {(
-            [
-              ["turno", "Turno"],
-              ["vacacion", "Vacación"],
-              ["compensatorio", "Día compensatorio"],
-              ["incapacidad", "Incapacidad"],
-              ["suspendido", "Suspendido"],
-              ["baja", "De baja"],
-            ] as const
-          ).map(([value, label]) => (
-            <button key={value} type="button" role="radio" aria-checked={mode === value} className={`btn sm${mode === value ? "" : " ghost"}`} onClick={() => setMode(value)}>
-              {label}
-            </button>
-          ))}
-        </div>
-        {mode !== "turno" && (
-          <div className="caption">
-            Los días elegidos quedan como {mode === "compensatorio" ? "día compensatorio" : DAY_OFF_LABEL[mode].toLowerCase()}: se quita el turno que hubiera y quedan como descanso también en el horario del CRM.
+        <div className="modal-sec">
+          <span className="modal-label">Qué asignar</span>
+          <div className="seg wrap" role="radiogroup" aria-label="Qué asignar">
+            {(
+              [
+                ["turno", "Turno"],
+                ["vacacion", "Vacación"],
+                ["compensatorio", "Compensatorio"],
+                ["incapacidad", "Incapacidad"],
+                ["suspendido", "Suspendido"],
+                ["baja", "De baja"],
+              ] as const
+            ).map(([value, label]) => (
+              <button key={value} type="button" role="radio" aria-checked={mode === value} className={mode === value ? "on" : undefined} onClick={() => setMode(value)}>
+                {label}
+              </button>
+            ))}
           </div>
-        )}
+          {mode !== "turno" && (
+            <span className="caption">
+              Los días elegidos quedan como {modeLabel}: se quita el turno que hubiera y quedan como descanso también en el horario del CRM.
+            </span>
+          )}
+        </div>
         {error && <div className="alert">{error}</div>}
         {result && <div className="alert warn">{result}</div>}
-        <div className="field">
-          <span>
-            Empleados ({selected.size} seleccionados)
-            <button type="button" className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setSelected(new Set(shown.map((e) => e.id)))}>
+
+        <div className="modal-sec">
+          <span className="modal-label">
+            Personas<small>{selected.size} seleccionadas</small>
+          </span>
+          <div className="picker-head">
+            <label className="pn-search">
+              <span className="sr-only">Buscar</span>
+              <IconSearch width={16} height={16} aria-hidden />
+              <input className="input" placeholder="Buscar por nombre o ID de reloj" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </label>
+            <button type="button" className="btn ghost sm" onClick={() => setSelected(new Set(shown.map((e) => e.id)))}>
               Todos
             </button>
-            <button type="button" className="btn ghost sm" style={{ marginLeft: 4 }} onClick={() => setSelected(new Set())}>
+            <button type="button" className="btn ghost sm" onClick={() => setSelected(new Set())} disabled={!selected.size}>
               Ninguno
             </button>
-          </span>
-          <input className="input" placeholder="Buscar" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
           <div className="emp-picker">
             {shown.map((e) => (
               <label key={e.id} className="check">
@@ -858,42 +997,43 @@ export function AssignModal({
                 {e.full_name} <span className="caption">{e.badge_number && `· ID ${e.badge_number}`}</span>
               </label>
             ))}
+            {shown.length === 0 && <span className="caption" style={{ padding: 8 }}>Nadie coincide con la búsqueda.</span>}
           </div>
         </div>
-        <div className="form-grid">
-          <label className="field">
-            <span>Desde</span>
-            <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} required />
-          </label>
-          <label className="field">
-            <span>Hasta</span>
-            <input className="input" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} required />
-          </label>
-          <div className="field full">
-            <span>Días</span>
-            <div className="days">
-              {WEEKDAYS.map((d, i) => (
-                <button
-                  type="button"
-                  key={i}
-                  className={`day-toggle${weekdays.includes(i) ? " on" : ""}`}
-                  onClick={() => setWeekdays((w) => (w.includes(i) ? w.filter((x) => x !== i) : [...w, i].sort()))}
-                >
-                  {d}
-                </button>
-              ))}
-            </div>
-          </div>
-          {mode !== "turno" && (
-            <label className="field full">
-              <span>Nota (opcional)</span>
-              <input className="input" value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} placeholder="Ej. vacaciones anuales, compensa el sábado 3" />
+
+        <div className="modal-sec">
+          <span className="modal-label">
+            Fechas<small>{dayCount ? `${dayCount} día${dayCount === 1 ? "" : "s"} en el rango` : "Rango inválido"}</small>
+          </span>
+          <div className="form-grid">
+            <label className="field">
+              <span>Desde</span>
+              <input className="input" type="date" value={from} onChange={(e) => setFrom(e.target.value)} required />
             </label>
-          )}
-          {mode === "turno" && (
-          <label className="field full">
-            <span>Turno</span>
-            <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+            <label className="field">
+              <span>Hasta</span>
+              <input className="input" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} required />
+            </label>
+          </div>
+          <div className="days" role="group" aria-label="Días de la semana">
+            {WEEKDAYS.map((d, i) => (
+              <button
+                type="button"
+                key={i}
+                aria-pressed={weekdays.includes(i)}
+                className={`day-toggle${weekdays.includes(i) ? " on" : ""}`}
+                onClick={() => setWeekdays((w) => (w.includes(i) ? w.filter((x) => x !== i) : [...w, i].sort()))}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {mode === "turno" ? (
+          <div className="modal-sec">
+            <span className="modal-label">Turno</span>
+            <select className="input" value={templateId} onChange={(e) => setTemplateId(e.target.value)} aria-label="Turno">
               {templates.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name} ({hhmm(t.start_time)}–{hhmm(t.end_time)})
@@ -901,36 +1041,45 @@ export function AssignModal({
               ))}
               <option value="custom">Horario personalizado…</option>
             </select>
-          </label>
-          )}
-          {mode === "turno" && templateId === "custom" && (
-            <>
-              <label className="field">
-                <span>Entrada</span>
-                <input className="input" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} required />
-              </label>
-              <label className="field">
-                <span>Salida (si es menor que la entrada, termina al día siguiente)</span>
-                <input className="input" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} required />
-              </label>
-              <label className="field">
-                <span>Minutos de descanso</span>
-                <input className="input" type="number" min={0} max={480} value={breakMin} onChange={(e) => setBreakMin(Number(e.target.value))} />
-              </label>
-            </>
-          )}
-        </div>
-        {mode === "turno" && (
-          <label className="check">
-            <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> Reemplazar horarios existentes en esas fechas
-          </label>
+            {templateId === "custom" && (
+              <div className="form-grid three">
+                <label className="field">
+                  <span>Entrada</span>
+                  <input className="input" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} required />
+                </label>
+                <label className="field">
+                  <span>Salida</span>
+                  <input className="input" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} required />
+                </label>
+                <label className="field">
+                  <span>Descanso (min)</span>
+                  <input className="input" type="number" min={0} max={480} value={breakMin} onChange={(e) => setBreakMin(Number(e.target.value))} />
+                </label>
+                {endTime < startTime && <span className="caption full">Termina al día siguiente (turno nocturno).</span>}
+              </div>
+            )}
+            <label className="check">
+              <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} /> Reemplazar horarios existentes en esas fechas
+            </label>
+          </div>
+        ) : (
+          <div className="modal-sec">
+            <label className="field">
+              <span>Nota (opcional)</span>
+              <input className="input" value={notes} maxLength={500} onChange={(e) => setNotes(e.target.value)} placeholder="Ej. vacaciones anuales, compensa el sábado 3" />
+            </label>
+          </div>
         )}
+
         <div className="modal-foot">
+          <span className="caption modal-foot-note">
+            {selected.size} {selected.size === 1 ? "persona" : "personas"} · {weekdays.length} día{weekdays.length === 1 ? "" : "s"} de la semana
+          </span>
           <button type="button" className="btn ghost" onClick={onClose}>
             Cancelar
           </button>
           <button className="btn" disabled={busy || !selected.size || !weekdays.length}>
-            {busy ? "Asignando…" : mode === "turno" ? "Asignar" : mode === "vacacion" ? "Asignar vacación" : "Asignar compensatorio"}
+            {busy ? "Asignando…" : `Asignar ${modeLabel}`}
           </button>
         </div>
       </form>

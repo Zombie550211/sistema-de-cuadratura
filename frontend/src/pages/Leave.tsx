@@ -1,19 +1,30 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 
-import { IconCalendar, IconChevronLeft, IconChevronRight, IconPlus, IconX } from "../components/Icons";
+import { IconCalendar, IconChevronLeft, IconChevronRight, IconPlus, IconSearch, IconX } from "../components/Icons";
 import { Modal } from "../components/Modal";
 import { ConfirmDelete, RowMenu } from "../components/RowMenu";
 import { api, ApiError, AREAS, DAY_OFF_LABEL, type Area, type CompensatoryStatus, type Holiday, type Employee, type Page, type ShiftDayOff, type ShiftTemplate, type VacationPeriod, type VacationStatus } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { addDays, fmtDate, seniority, today } from "../lib/format";
+import { addDays, fmtDate, fmtLongDate, seniority, today } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
+import { Compensatory } from "./Compensatory";
 import { AssignModal } from "./Schedules";
 
 type Kind = "vacacion" | "compensatorio";
+type Filter = "todos" | "pendientes" | "pronto" | "hoy";
+
+const initials = (name: string) =>
+  name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase();
 
 /** Un tramo de días seguidos (p. ej. una semana de vacación), para mostrarlo como "5–9 ene". */
-interface Range {
+export interface Range {
   from: string;
   to: string;
   days: ShiftDayOff[];
@@ -22,7 +33,7 @@ interface Range {
 const shortFmt = new Intl.DateTimeFormat("es-SV", { timeZone: "UTC", day: "numeric", month: "short" });
 const short = (ymd: string) => shortFmt.format(new Date(`${ymd}T00:00:00Z`)).replace(".", "");
 
-function ranges(days: ShiftDayOff[]): Range[] {
+export function ranges(days: ShiftDayOff[]): Range[] {
   const out: Range[] = [];
   for (const d of [...days].sort((a, b) => a.work_date.localeCompare(b.work_date))) {
     const last = out[out.length - 1];
@@ -71,6 +82,10 @@ const rangeLabel = (r: Range) => (r.from === r.to ? short(r.from) : `${short(r.f
 /** Días de vacación o compensatorios de una sección: todos sus empleados, con los días que
  *  tienen en el año. Se asignan con el mismo modal de Horarios y se quitan desde aquí. */
 export function Leave({ kind, area }: { kind: Kind; area: Area }) {
+  return kind === "compensatorio" ? <Compensatory area={area} /> : <LeaveView kind={kind} area={area} />;
+}
+
+function LeaveView({ kind, area }: { kind: Kind; area: Area }) {
   const section = AREAS.find((a) => a.area === area)!.label;
   const label = kind === "vacacion" ? "Días de vacación" : "Días compensatorio";
   const noun = DAY_OFF_LABEL[kind].toLowerCase();
@@ -79,6 +94,8 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
   const navigate = useNavigate();
   const [year, setYear] = useState(() => Number(today().slice(0, 4)));
   const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<Filter>("todos");
+  const base = kind === "vacacion" ? "vacaciones" : "compensatorios";
   const [assigning, setAssigning] = useState<Assigning | null>(null);
   const [removing, setRemoving] = useState<{ employee: Employee; range: Range } | null>(null);
 
@@ -113,7 +130,43 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
 
   const all = employees.data?.items ?? [];
   const search = q.trim().toLowerCase();
-  const shown = all.filter((e) => !search || e.full_name.toLowerCase().includes(search) || e.code.toLowerCase().includes(search));
+  const now = today();
+  const soon = addDays(now, 60);
+  const isOffToday = (id: number) => (byEmployee.get(id) ?? []).some((d) => d.work_date === now);
+  const comesSoon = (id: number) => {
+    const v = vacationOf.get(id);
+    return !!v?.next_date && v.pending === 0 && v.next_date >= now && v.next_date <= soon;
+  };
+  const matches = (e: Employee) => {
+    if (filter === "pendientes") return isVacation ? (vacationOf.get(e.id)?.pending ?? 0) > 0 : (compOf.get(e.id)?.balance ?? 0) > 0;
+    if (filter === "pronto") return comesSoon(e.id);
+    if (filter === "hoy") return isOffToday(e.id);
+    return true;
+  };
+  const shown = all.filter((e) => matches(e) && (!search || e.full_name.toLowerCase().includes(search) || e.code.toLowerCase().includes(search)));
+
+  // Indicadores de la sección (sin filtros ni búsqueda).
+  const withPending = all.filter((e) => (vacationOf.get(e.id)?.pending ?? 0) > 0);
+  const pendingDays = withPending.reduce((s, e) => s + vacationOf.get(e.id)!.pending, 0);
+  const soonCount = all.filter((e) => comesSoon(e.id)).length;
+  const offToday = all.filter((e) => isOffToday(e.id)).length;
+  const yearDays = (days.data ?? []).filter((d) => all.some((e) => e.id === d.employee_id)).length;
+  const withBalance = all.filter((e) => (compOf.get(e.id)?.balance ?? 0) > 0);
+  const balanceDays = withBalance.reduce((s, e) => s + compOf.get(e.id)!.balance, 0);
+  const earnedYear = all.reduce((s, e) => s + (compOf.get(e.id)?.earned.filter(inYear).length ?? 0), 0);
+  const lostYear = all.reduce((s, e) => s + (compOf.get(e.id)?.lost.filter(inYear).length ?? 0), 0);
+  const filters: [Filter, string][] = isVacation
+    ? [
+        ["todos", "Todos"],
+        ["pendientes", "Con días pendientes"],
+        ["pronto", "Les tocan en 60 días"],
+        ["hoy", "De vacación hoy"],
+      ]
+    : [
+        ["todos", "Todos"],
+        ["pendientes", "Con saldo a favor"],
+        ["hoy", "Con compensatorio hoy"],
+      ];
 
   function done() {
     setAssigning(null);
@@ -124,52 +177,131 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
   }
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <span className="caption">{label}</span>
-          <h1>{section}</h1>
-        </div>
-        {!isVacation && (
-          <button className="btn ghost" onClick={() => setEditingHolidays(true)}>
-            <IconCalendar /> Asuetos {year}
-          </button>
-        )}
-        {canEdit && (
-          <button className="btn" onClick={() => setAssigning({ ids: [] })} disabled={!all.length || !templates.data}>
-            <IconPlus /> Asignar {noun}
-          </button>
-        )}
-      </div>
+    <div className="page wide lv">
+      <h1 className="sr-only">
+        {label} · {section}
+      </h1>
 
-      <div className="card">
-        <div className="row" style={{ marginBottom: 16 }}>
-          <div className="row" style={{ gap: 4 }}>
-            <button className="icon-btn" onClick={() => setYear(year - 1)} aria-label="Año anterior">
-              <IconChevronLeft width={20} height={20} />
+      <section className="pn-bar" aria-label="Sección y filtros">
+        <div className="pn-row">
+          <nav className="seg" aria-label="Sección">
+            {AREAS.map((a) => (
+              <NavLink key={a.slug} to={`/${base}/${a.slug}`} className={({ isActive }) => `seg-link${isActive ? " on" : ""}`}>
+                {a.label}
+              </NavLink>
+            ))}
+          </nav>
+          <span className="spacer" />
+          {!isVacation && (
+            <button className="btn ghost" onClick={() => setEditingHolidays(true)}>
+              <IconCalendar /> Asuetos {year}
             </button>
-            <span className="sch-week" style={{ minWidth: 80 }}>
-              {year}
-            </span>
+          )}
+          {canEdit && (
+            <button className="btn" onClick={() => setAssigning({ ids: [] })} disabled={!all.length || !templates.data}>
+              <IconPlus /> Asignar {noun}
+            </button>
+          )}
+        </div>
+        <div className="pn-row pn-tools">
+          <div className="pn-period">
+            <button className="icon-btn" onClick={() => setYear(year - 1)} aria-label="Año anterior">
+              <IconChevronLeft width={18} height={18} />
+            </button>
+            <b className="lv-year">{year}</b>
             <button className="icon-btn" onClick={() => setYear(year + 1)} aria-label="Año siguiente">
-              <IconChevronRight width={20} height={20} />
+              <IconChevronRight width={18} height={18} />
             </button>
           </div>
-          <input className="input" style={{ flex: 1, minWidth: 200 }} placeholder="Buscar por nombre o código" value={q} onChange={(e) => setQ(e.target.value)} />
+          <label className="pn-search">
+            <span className="sr-only">Buscar</span>
+            <IconSearch width={16} height={16} aria-hidden />
+            <input className="input" placeholder="Buscar por nombre o código" value={q} onChange={(e) => setQ(e.target.value)} />
+          </label>
+          <div className="seg" role="radiogroup" aria-label="Mostrar">
+            {filters.map(([value, text]) => (
+              <button key={value} type="button" role="radio" aria-checked={filter === value} className={filter === value ? "on" : undefined} onClick={() => setFilter(value)}>
+                {text}
+              </button>
+            ))}
+          </div>
         </div>
+      </section>
 
-        {(employees.error || days.error || comp.error || vacations.error) && (
-          <div className="alert">{employees.error ?? days.error ?? comp.error ?? vacations.error}</div>
-        )}
-        <div className="table-wrap">
-          <table className="table">
+      {isVacation ? (
+        <dl className="home-kpis lv-kpis">
+          <div className="home-kpi">
+            <dt>Con días pendientes</dt>
+            <dd className={`home-kpi-value mono${withPending.length ? " emp-warn" : ""}`}>{withPending.length}</dd>
+            <dd className="home-kpi-note">{pendingDays ? `${pendingDays} días por dar en total` : "Nadie debe vacaciones"}</dd>
+          </div>
+          <div className="home-kpi">
+            <dt>Les tocan en 60 días</dt>
+            <dd className="home-kpi-value mono">{soonCount}</dd>
+            <dd className="home-kpi-note">Cumplen un año más antes del {fmtDate(soon)}</dd>
+          </div>
+          <div className="home-kpi">
+            <dt>De vacación hoy</dt>
+            <dd className="home-kpi-value mono">{offToday}</dd>
+            <dd className="home-kpi-note">{fmtLongDate(now)}</dd>
+          </div>
+          <div className="home-kpi">
+            <dt>Días asignados en {year}</dt>
+            <dd className="home-kpi-value mono">{yearDays}</dd>
+            <dd className="home-kpi-note">Descansados o por descansar</dd>
+          </div>
+        </dl>
+      ) : (
+        <dl className="home-kpis lv-kpis">
+          <div className="home-kpi">
+            <dt>Con saldo a favor</dt>
+            <dd className={`home-kpi-value mono${withBalance.length ? " emp-warn" : ""}`}>{withBalance.length}</dd>
+            <dd className="home-kpi-note">{balanceDays ? `${balanceDays} compensatorios por dar` : "Nadie tiene saldo"}</dd>
+          </div>
+          <div className="home-kpi">
+            <dt>Asuetos trabajados en {year}</dt>
+            <dd className="home-kpi-value mono">{earnedYear}</dd>
+            <dd className="home-kpi-note">Cada uno gana un compensatorio</dd>
+          </div>
+          <div className="home-kpi">
+            <dt>Asignados en {year}</dt>
+            <dd className="home-kpi-value mono">{yearDays}</dd>
+            <dd className="home-kpi-note">{offToday} con compensatorio hoy</dd>
+          </div>
+          <div className="home-kpi">
+            <dt>Asuetos perdidos</dt>
+            <dd className="home-kpi-value mono">{lostYear}</dd>
+            <dd className="home-kpi-note">No marcaron en el asueto</dd>
+          </div>
+        </dl>
+      )}
+
+      {(employees.error || days.error || comp.error || vacations.error) && <div className="alert">{employees.error ?? days.error ?? comp.error ?? vacations.error}</div>}
+
+      <div className="card emp-card">
+        <div className="emp-card-head">
+          <div className="emp-card-title">
+            <h2 className="pn-h2">{section}</h2>
+            <span className="caption">
+              {shown.length} {shown.length === 1 ? "persona" : "personas"}
+              {shown.length !== all.length && ` de ${all.length}`}
+              {isVacation ? " · 15 días por cada año cumplido" : " · un compensatorio por cada asueto trabajado"}
+            </span>
+          </div>
+        </div>
+        <div className="table-wrap emp-scroll">
+          <table className="table pn-table emp-table">
             <thead>
               <tr>
                 <th>Empleado</th>
                 {isVacation && <th>Ingreso</th>}
                 {isVacation && <th>Vacaciones</th>}
                 {!isVacation && <th>Asuetos trabajados en {year}</th>}
-                {!isVacation && <th className="num" title="Compensatorios ganados menos los ya asignados (todos los años)">Saldo</th>}
+                {!isVacation && (
+                  <th className="num" title="Compensatorios ganados menos los ya asignados (todos los años)">
+                    Saldo
+                  </th>
+                )}
                 <th className="num">{isVacation ? `Días en ${year}` : `Asignados en ${year}`}</th>
                 <th>Fechas</th>
                 {canEdit && <th className="row-actions" />}
@@ -185,17 +317,24 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
                 return (
                   <tr key={e.id}>
                     <td>
-                      <div className="nowrap">{e.full_name}</div>
-                      <div className="caption">
-                        {e.code}
-                        {e.position && ` · ${e.position}`}
+                      <div className="pn-person">
+                        <span className="pn-avatar" aria-hidden>
+                          {initials(e.full_name)}
+                        </span>
+                        <span>
+                          <b>{e.full_name}</b>
+                          <span className="caption">
+                            {e.code}
+                            {e.position && ` · ${e.position}`}
+                          </span>
+                        </span>
                       </div>
                     </td>
                     {isVacation && (
                       <td className="nowrap">
                         {e.hire_date ? (
                           <>
-                            <div>{fmtDate(e.hire_date)}</div>
+                            <div className="mono">{fmtDate(e.hire_date)}</div>
                             <div className="caption">{seniority(e.hire_date)}</div>
                           </>
                         ) : (
@@ -207,19 +346,29 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
                     {!isVacation && <EarnedCell c={c} inYear={inYear} />}
                     {!isVacation && (
                       <td className="num">
-                        {c ? <span className={`badge${c.balance > 0 ? " accent" : c.balance < 0 ? " danger" : ""}`} title={`${c.earned.length} ganados · ${c.taken} asignados`}>{c.balance}</span> : <span className="muted">—</span>}
+                        {c ? (
+                          <span className={`lv-pill${c.balance > 0 ? " warn" : c.balance < 0 ? " bad" : " ok"}`} title={`${c.earned.length} ganados · ${c.taken} asignados`}>
+                            {c.balance}
+                          </span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
                       </td>
                     )}
                     <td className="num">{mine.length ? <b className="mono">{mine.length}</b> : <span className="muted">0</span>}</td>
                     <td>
                       {mine.length ? (
-                        <div className="chips" style={{ flexWrap: "wrap" }}>
+                        <div className="lv-ranges">
                           {ranges(mine).map((r) => (
-                            <span key={r.from} className="badge accent" title={r.days.map((d) => fmtDate(d.work_date) + (d.notes ? ` · ${d.notes}` : "")).join("\n")}>
+                            <span
+                              key={r.from}
+                              className={`lv-range${r.from <= now && now <= r.to ? " now" : r.to < now ? " past" : ""}`}
+                              title={r.days.map((d) => fmtDate(d.work_date) + (d.notes ? ` · ${d.notes}` : "")).join("\n")}
+                            >
                               {rangeLabel(r)}
-                              {r.days.length > 1 && ` (${r.days.length})`}
+                              {r.days.length > 1 && <small>{r.days.length} d</small>}
                               {canEdit && (
-                                <button className="chip-x" aria-label={`Quitar ${rangeLabel(r)}`} onClick={() => setRemoving({ employee: e, range: r })}>
+                                <button className="lv-range-x" aria-label={`Quitar ${rangeLabel(r)}`} onClick={() => setRemoving({ employee: e, range: r })}>
                                   <IconX width={12} height={12} />
                                 </button>
                               )}
@@ -250,7 +399,7 @@ export function Leave({ kind, area }: { kind: Kind; area: Area }) {
               })}
             </tbody>
           </table>
-          {employees.data && shown.length === 0 && <div className="empty">No hay empleados que coincidan.</div>}
+          {employees.data && shown.length === 0 && <div className="empty">{filter === "todos" ? "No hay empleados que coincidan." : "Nadie en este filtro."}</div>}
         </div>
       </div>
 
@@ -308,9 +457,9 @@ function EarnedCell({ c, inYear }: { c?: CompensatoryStatus; inYear: (h: Holiday
   if (!earned.length && !lost.length) return <td><span className="muted">—</span></td>;
   return (
     <td>
-      <div className="chips" style={{ flexWrap: "wrap" }}>
+      <div className="lv-ranges">
         {earned.map((h) => (
-          <span key={h.id} className="badge accent" title={`${h.name}: marcó, ganó un compensatorio`}>
+          <span key={h.id} className="lv-range" title={`${h.name}: marcó, ganó un compensatorio`}>
             {short(h.day)}
           </span>
         ))}
@@ -325,7 +474,7 @@ function EarnedCell({ c, inYear }: { c?: CompensatoryStatus; inYear: (h: Holiday
 }
 
 /** Asuetos del año: vienen cargados los nacionales; RRHH agrega los locales o quita alguno. */
-function HolidaysModal({ year, canEdit, onClose, onChanged }: { year: number; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
+export function HolidaysModal({ year, canEdit, onClose, onChanged }: { year: number; canEdit: boolean; onClose: () => void; onChanged: () => void }) {
   const list = useAsync(() => api.get<Holiday[]>("/schedules/holidays", { year }), [year]);
   const [day, setDay] = useState("");
   const [name, setName] = useState("");
@@ -356,10 +505,11 @@ function HolidaysModal({ year, canEdit, onClose, onChanged }: { year: number; ca
   }
 
   return (
-    <Modal title={`Asuetos ${year}`} onClose={onClose}>
-      <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
-        Quien marca en un asueto gana un día compensatorio; quien no marca, lo pierde. Si un asueto aún no tiene marcas importadas, no se cuenta como perdido.
-      </p>
+    <Modal
+      title={`Asuetos ${year}`}
+      subtitle="Quien marca en un asueto gana un día compensatorio; quien no marca, lo pierde. Si un asueto aún no tiene marcas importadas, no se cuenta como perdido."
+      onClose={onClose}
+    >
       {list.error && <div className="alert">{list.error}</div>}
       <div className="table-wrap">
         <table className="table">
@@ -405,31 +555,39 @@ function HolidaysModal({ year, canEdit, onClose, onChanged }: { year: number; ca
   );
 }
 
-/** Estado de las vacaciones: días pendientes de todos sus períodos o cuándo le tocan. */
+/** Estado de las vacaciones: días pendientes de todos sus períodos o, si está al día, cuánto
+ *  falta para las próximas (barra del año en curso hasta el aniversario). */
 function VacationCell({ v, onOpen }: { v?: VacationStatus; onOpen: () => void }) {
-  if (!v?.next_date) return <td><span className="muted" title="Agregue la fecha de ingreso en la ficha del empleado">Sin fecha de ingreso</span></td>;
-  if (!v.periods.length) {
+  if (!v?.next_date) return <td><span className="emp-warn-text" title="Agregue la fecha de ingreso en la ficha del empleado">Sin fecha de ingreso</span></td>;
+  const owing = v.periods.filter((p) => p.pending > 0);
+  if (v.pending > 0) {
     return (
       <td className="nowrap">
-        <div>Le tocan el {fmtDate(v.next_date)}</div>
-        <div className="caption">Al cumplir su primer año</div>
+        <button type="button" className="lv-status warn" onClick={onOpen} title="Ver períodos: días descansados y trabajados">
+          <b className="mono">{v.pending}</b> día{v.pending === 1 ? "" : "s"} pendiente{v.pending === 1 ? "" : "s"}
+        </button>
+        <div className="caption">{owing.length > 1 ? `De ${owing.length} períodos` : `Período ${periodLabel(owing[0])}`}</div>
       </td>
     );
   }
-  const owing = v.periods.filter((p) => p.pending > 0);
+  const left = daysBetween(today(), v.next_date) - 1;
+  const progress = Math.min(1, Math.max(0, 1 - left / 365));
   return (
     <td className="nowrap">
-      <button type="button" className="link-btn" onClick={onOpen} title="Ver períodos: días descansados y trabajados">
-        {v.pending > 0 ? (
-          <span className="badge warn">
-            {v.pending} día{v.pending === 1 ? "" : "s"} pendiente{v.pending === 1 ? "" : "s"}
-          </span>
-        ) : (
-          <span className="badge accent">Al día</span>
-        )}
-      </button>
-      <div className="caption">
-        {owing.length > 1 ? `De ${owing.length} períodos` : owing.length === 1 ? `Período ${periodLabel(owing[0])}` : `Próximas: ${fmtDate(v.next_date)}`}
+      {v.periods.length ? (
+        <button type="button" className="lv-status ok" onClick={onOpen} title="Ver períodos: días descansados y trabajados">
+          Al día
+        </button>
+      ) : (
+        <span className="lv-status">Primer año</span>
+      )}
+      <div className="lv-next" title={`Próximas vacaciones: ${fmtDate(v.next_date)}`}>
+        <span className="lv-next-bar" aria-hidden>
+          <i style={{ transform: `scaleX(${progress})` }} />
+        </span>
+        <span className="caption">
+          {fmtDate(v.next_date)} · {left <= 0 ? "hoy" : `en ${left} día${left === 1 ? "" : "s"}`}
+        </span>
       </div>
     </td>
   );
@@ -471,11 +629,12 @@ function VacationPeriodsModal({
   }
 
   return (
-    <Modal title={`Vacaciones de ${employee.full_name}`} onClose={onClose} wide>
-      <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
-        Ingreso {fmtDate(v.hire_date!)} · 15 días por cada año cumplido. Los días descansados se toman del calendario (también puede asignar fechas pasadas) y se
-        aplican al período más antiguo que tenga días pendientes.
-      </p>
+    <Modal
+      title={`Vacaciones de ${employee.full_name}`}
+      subtitle={`Ingreso ${fmtDate(v.hire_date!)} · 15 días por cada año cumplido. Los días descansados se aplican al período más antiguo con días pendientes (también puede asignar fechas pasadas).`}
+      onClose={onClose}
+      wide
+    >
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -521,12 +680,12 @@ function VacationPeriodsModal({
                     )}
                   </td>
                   <td className="nowrap">
-                    {p.settled ? (
-                      <span className="badge accent">Completas</span>
-                    ) : p.pending > 0 ? (
-                      <span className="badge warn">{p.pending}</span>
+                    {p.settled || p.pending <= 0 ? (
+                      <span className="lv-status ok">Completas</span>
                     ) : (
-                      <span className="badge accent">Completas</span>
+                      <span className="lv-status warn">
+                        <b className="mono">{p.pending}</b> pendiente{p.pending === 1 ? "" : "s"}
+                      </span>
                     )}
                   </td>
                   {canEdit && (
@@ -678,15 +837,15 @@ function AssignVacationModal({
             <option value="">Próximo período (desde {fmtDate(v.next_date!)})</option>
           </select>
         </label>
-        <div className="chips" role="radiogroup" aria-label="Qué pasó con las vacaciones">
-          <button type="button" role="radio" aria-checked={!worked} className={`btn sm${worked ? " ghost" : ""}`} onClick={() => setWorked(false)}>
+        <div className="seg" role="radiogroup" aria-label="Qué pasó con las vacaciones" style={{ alignSelf: "flex-start" }}>
+          <button type="button" role="radio" aria-checked={!worked} className={worked ? undefined : "on"} onClick={() => setWorked(false)}>
             Las descansó
           </button>
           <button
             type="button"
             role="radio"
             aria-checked={worked}
-            className={`btn sm${worked ? "" : " ghost"}`}
+            className={worked ? "on" : undefined}
             disabled={!period}
             title={period ? undefined : "Solo se pueden trabajar días de un período que ya le tocó"}
             onClick={() => setWorked(true)}
@@ -729,7 +888,7 @@ function AssignVacationModal({
 }
 
 /** Quita un tramo de días: cada día vuelve a quedar sin turno (también en el CRM). */
-function RemoveRange({ employee, range, noun, onClose, onDone }: { employee: Employee; range: Range; noun: string; onClose: () => void; onDone: () => void }) {
+export function RemoveRange({ employee, range, noun, onClose, onDone }: { employee: Employee; range: Range; noun: string; onClose: () => void; onDone: () => void }) {
   const [rest, ...others] = range.days;
   return (
     <ConfirmDelete
