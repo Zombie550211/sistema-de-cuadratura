@@ -8,6 +8,8 @@ import { useCollapsedTeams } from "../components/TeamGroups";
 import {
   api,
   AREAS,
+  type CompensatoryStatus,
+  type Holiday,
   DAY_OFF_LABEL,
   groupByPosition,
   groupByTeam,
@@ -24,7 +26,7 @@ import {
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ampm, DAY_OFF_COLOR, dayOffBand, dayOffColor, isNoShow, NO_SHOW, OTHER_SHIFT, SHIFT_KINDS, shiftColor, shiftLabel } from "../lib/shiftColors";
-import { addDays, fmtDateTime, fmtLongDate, fmtRange, fmtShortDay, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
+import { addDays, fmtDate, fmtDateTime, fmtLongDate, fmtRange, fmtShortDay, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
@@ -885,8 +887,29 @@ export function AssignModal({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Compensatorio: qué asueto ganado (y sin usar) se da; la nota lleva su fecha y así queda usado.
+  const comp = useAsync(
+    () => (mode === "compensatorio" ? api.get<CompensatoryStatus[]>("/schedules/compensatory") : Promise.resolve(null)),
+    [mode],
+  );
+  const availableOf = useMemo(() => new Map((comp.data ?? []).map((c) => [c.employee_id, c.available])), [comp.data]);
+  const inList = useMemo(() => new Set(employees.map((e) => e.id)), [employees]);
+  // Asuetos con compensatorio disponible para alguien de la lista, con cuántos lo tienen.
+  const holidayOptions = useMemo(() => {
+    const map = new Map<number, { holiday: Holiday; count: number }>();
+    for (const c of comp.data ?? []) {
+      if (!inList.has(c.employee_id)) continue;
+      for (const h of c.available) map.set(h.id, { holiday: h, count: (map.get(h.id)?.count ?? 0) + 1 });
+    }
+    return [...map.values()].sort((a, b) => a.holiday.day.localeCompare(b.holiday.day));
+  }, [comp.data, inList]);
+  const [holidayId, setHolidayId] = useState<string>("");
+  const holiday = holidayOptions.find((o) => String(o.holiday.id) === holidayId)?.holiday ?? null;
+  const hasIt = (id: number) => !!holiday && !!availableOf.get(id)?.some((h) => h.id === holiday.id);
 
-  const shown = employees.filter((e) => !search || e.full_name.toLowerCase().includes(search.toLowerCase()) || e.badge_number === search);
+  const shown = employees.filter(
+    (e) => (!holiday || hasIt(e.id)) && (!search || e.full_name.toLowerCase().includes(search.toLowerCase()) || e.badge_number === search),
+  );
   const toggle = (id: number) =>
     setSelected((s) => {
       const n = new Set(s);
@@ -908,7 +931,7 @@ export function AssignModal({
           date_to: to,
           weekdays,
           kind: mode,
-          notes: notes.trim() || null,
+          notes: (holiday && mode === "compensatorio" ? [`Compensatorio ${fmtDate(holiday.day)} (${holiday.name})`, notes.trim()].filter(Boolean).join(" · ") : notes.trim()) || null,
         });
         onDone();
         return;
@@ -938,6 +961,10 @@ export function AssignModal({
 
   const modeLabel = mode === "turno" ? "turno" : mode === "compensatorio" ? "día compensatorio" : DAY_OFF_LABEL[mode].toLowerCase();
   const dayCount = from && to && to >= from ? Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1 : 0;
+  // Días que realmente se asignan: los del rango que caen en los días de la semana marcados.
+  const assignedDays = Array.from({ length: dayCount }, (_, i) => addDays(from, i)).filter((d) =>
+    weekdays.includes((new Date(`${d}T00:00:00Z`).getUTCDay() + 6) % 7),
+  ).length;
 
   return (
     <Modal
@@ -973,6 +1000,41 @@ export function AssignModal({
         {error && <div className="alert">{error}</div>}
         {result && <div className="alert warn">{result}</div>}
 
+        {mode === "compensatorio" && (
+          <div className="modal-sec">
+            <span className="modal-label">
+              Compensatorio disponible<small>asuetos trabajados desde el 15/09/2026 y aún sin usar</small>
+            </span>
+            {comp.error && <div className="alert">{comp.error}</div>}
+            <select
+              className="input"
+              value={holidayId}
+              disabled={!comp.data}
+              aria-label="Compensatorio disponible"
+              onChange={(e) => {
+                setHolidayId(e.target.value);
+                // Solo quedan seleccionadas las personas que tienen ese asueto disponible.
+                const h = holidayOptions.find((o) => String(o.holiday.id) === e.target.value)?.holiday;
+                if (h) setSelected((sel) => new Set([...sel].filter((id) => availableOf.get(id)?.some((x) => x.id === h.id))));
+              }}
+            >
+              <option value="">{comp.data ? "Sin asueto: no descuenta uno en particular" : "Cargando compensatorios…"}</option>
+              {holidayOptions.map(({ holiday: h, count }) => (
+                <option key={h.id} value={h.id}>
+                  {fmtDate(h.day)} · {h.name} — {count} {count === 1 ? "persona lo tiene" : "personas lo tienen"}
+                </option>
+              ))}
+            </select>
+            {comp.data && !holidayOptions.length && (
+              <span className="caption">Nadie de la lista tiene compensatorios disponibles: no hay asuetos trabajados con marcas desde el 15/09/2026.</span>
+            )}
+            {holiday && <span className="caption">La lista muestra solo a quienes trabajaron el {fmtDate(holiday.day)} y aún no lo han usado.</span>}
+            {holiday && assignedDays > 1 && (
+              <div className="alert warn">Un asueto da un solo día compensatorio y el rango tiene {assignedDays} días. Elija un solo día.</div>
+            )}
+          </div>
+        )}
+
         <div className="modal-sec">
           <span className="modal-label">
             Personas<small>{selected.size} seleccionadas</small>
@@ -995,6 +1057,15 @@ export function AssignModal({
               <label key={e.id} className="check">
                 <input type="checkbox" checked={selected.has(e.id)} onChange={() => toggle(e.id)} />
                 {e.full_name} <span className="caption">{e.badge_number && `· ID ${e.badge_number}`}</span>
+                {mode === "compensatorio" && !!availableOf.get(e.id)?.length && (
+                  <span className="picker-tags">
+                    {availableOf.get(e.id)!.map((h) => (
+                      <span key={h.id} className={`picker-tag${holiday?.id === h.id ? " on" : ""}`} title={h.name}>
+                        {fmtDate(h.day).slice(0, 5)}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </label>
             ))}
             {shown.length === 0 && <span className="caption" style={{ padding: 8 }}>Nadie coincide con la búsqueda.</span>}
@@ -1078,7 +1149,7 @@ export function AssignModal({
           <button type="button" className="btn ghost" onClick={onClose}>
             Cancelar
           </button>
-          <button className="btn" disabled={busy || !selected.size || !weekdays.length}>
+          <button className="btn" disabled={busy || !selected.size || !weekdays.length || (!!holiday && assignedDays > 1)}>
             {busy ? "Asignando…" : `Asignar ${modeLabel}`}
           </button>
         </div>

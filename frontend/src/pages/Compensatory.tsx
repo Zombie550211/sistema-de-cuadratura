@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 import { IconCalendar, IconCheck, IconChevronLeft, IconChevronRight, IconPlus, IconSearch, IconX } from "../components/Icons";
@@ -12,6 +12,9 @@ import { HolidaysModal, ranges, RemoveRange, type Range } from "./Leave";
 import { AssignModal } from "./Schedules";
 
 type Filter = "todos" | "saldo" | "negativo";
+
+/** Los compensatorios se llevan desde el asueto del 15 de septiembre de 2026 (igual en el servidor). */
+const START = "2026-09-15";
 
 const shortFmt = new Intl.DateTimeFormat("es-SV", { timeZone: "UTC", day: "numeric", month: "short" });
 const short = (ymd: string) => shortFmt.format(new Date(`${ymd}T00:00:00Z`)).replace(".", "");
@@ -41,6 +44,7 @@ export function Compensatory({ area }: { area: Area }) {
   const [giving, setGiving] = useState<Employee | null>(null);
   const [removing, setRemoving] = useState<{ employee: Employee; range: Range } | null>(null);
   const [editingHolidays, setEditingHolidays] = useState(false);
+  const strip = useRef<HTMLDivElement>(null);
 
   const employees = useAsync(() => api.get<Page<Employee>>("/employees", { status: "activo", area, limit: 500 }), [area]);
   const templates = useAsync(() => (canEdit ? api.get<ShiftTemplate[]>("/schedules/templates") : Promise.resolve([])), [canEdit]);
@@ -100,6 +104,59 @@ export function Compensatory({ area }: { area: Area }) {
   const takenYear = (days.data ?? []).filter((d) => ids.has(d.employee_id)).length;
   const offToday = (days.data ?? []).filter((d) => ids.has(d.employee_id) && d.work_date === now).length;
   const nextHoliday = yearHolidays.find((h) => h.day >= now);
+
+  // La franja de asuetos avanza sola (unos 30 px por segundo); se detiene con el mouse encima o
+  // con el foco dentro, y al llegar al final espera un momento y vuelve al inicio.
+  useEffect(() => {
+    const el = strip.current;
+    if (!el || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let paused = false;
+    let wait = 0;
+    let last = performance.now();
+    let pos = el.scrollLeft;
+    let frame = 0;
+    const pause = () => (paused = true);
+    const resume = () => {
+      paused = false;
+      pos = el.scrollLeft;
+    };
+    const step = (t: number) => {
+      const dt = Math.min(t - last, 100);
+      last = t;
+      const end = el.scrollWidth - el.clientWidth;
+      if (!paused && end > 0) {
+        if (wait > 0) {
+          wait -= dt;
+          if (wait <= 0 && pos >= end) {
+            pos = 0;
+            el.scrollTo({ left: 0, behavior: "smooth" });
+            wait = 1500;
+          }
+        } else {
+          pos = Math.min(end, pos + dt * 0.03);
+          el.scrollLeft = pos;
+          if (pos >= end) wait = 2000;
+        }
+      }
+      frame = requestAnimationFrame(step);
+    };
+    el.addEventListener("mouseenter", pause);
+    el.addEventListener("mouseleave", resume);
+    el.addEventListener("focusin", pause);
+    el.addEventListener("focusout", resume);
+    el.addEventListener("touchstart", pause, { passive: true });
+    el.addEventListener("touchend", resume);
+    frame = requestAnimationFrame(step);
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener("mouseenter", pause);
+      el.removeEventListener("mouseleave", resume);
+      el.removeEventListener("focusin", pause);
+      el.removeEventListener("focusout", resume);
+      el.removeEventListener("touchstart", pause);
+      el.removeEventListener("touchend", resume);
+    };
+  }, [yearHolidays.length]);
 
   function done() {
     setAssigning(null);
@@ -219,16 +276,17 @@ export function Compensatory({ area }: { area: Area }) {
             </button>
           )}
         </div>
-        <div className="cp-holidays">
+        <div className="cp-holidays" ref={strip}>
           {yearHolidays.map((h) => {
             const st = holidayStats.get(h.id)!;
             const total = st.earned + st.lost;
             const future = h.day > now;
+            const before = h.day < START;
             return (
               <button
                 key={h.id}
                 type="button"
-                className={`cp-holiday${holidayId === h.id ? " on" : ""}${future ? " future" : ""}`}
+                className={`cp-holiday${holidayId === h.id ? " on" : ""}${future ? " future" : ""}${before ? " before" : ""}`}
                 aria-pressed={holidayId === h.id}
                 disabled={!total}
                 onClick={() => setHolidayId(holidayId === h.id ? null : h.id)}
@@ -248,7 +306,7 @@ export function Compensatory({ area }: { area: Area }) {
                     </span>
                   </>
                 ) : (
-                  <span className="cp-holiday-meta">{future ? "Próximo" : "Sin marcas importadas"}</span>
+                  <span className="cp-holiday-meta">{before ? "Antes del inicio (15/09/2026)" : future ? "Próximo" : "Sin marcas importadas"}</span>
                 )}
               </button>
             );

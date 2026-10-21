@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models import Employee, Holiday, Punch, ShiftDayOff
 
+# Los compensatorios se llevan en el sistema desde el asueto del 15 de septiembre de 2026: los
+# asuetos y los días compensatorio anteriores no cuentan para el saldo.
+START = date(2026, 9, 15)
+
 
 def easter(year: int) -> date:
     """Domingo de Pascua (algoritmo gregoriano anónimo)."""
@@ -95,7 +99,7 @@ def unused(earned: list[Holiday], notes: list[str | None]) -> list[Holiday]:
 
 def compensatory_status(db: Session, employees: list[Employee], today: date) -> list[CompensatoryStatus]:
     tz = get_settings().tz
-    holidays = db.scalars(select(Holiday).where(Holiday.day <= today).order_by(Holiday.day)).all()
+    holidays = db.scalars(select(Holiday).where(Holiday.day >= START, Holiday.day <= today).order_by(Holiday.day)).all()
     ids = [e.id for e in employees]
     marked: set[tuple[int, date]] = set()
     days_with_data: set[date] = set()
@@ -117,7 +121,9 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
     notes: dict[int, list[str | None]] = {}
     if ids:
         for emp_id, note in db.execute(
-            select(ShiftDayOff.employee_id, ShiftDayOff.notes).where(ShiftDayOff.kind == "compensatorio", ShiftDayOff.employee_id.in_(ids))
+            select(ShiftDayOff.employee_id, ShiftDayOff.notes).where(
+                ShiftDayOff.kind == "compensatorio", ShiftDayOff.employee_id.in_(ids), ShiftDayOff.work_date >= START
+            )
         ):
             notes.setdefault(emp_id, []).append(note)
 

@@ -893,7 +893,6 @@ function DownloadImage({
 }) {
   const [from, to] = range;
   const local = localName(device);
-  const periodDays = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
   const lateByKey = useMemo(() => new Map(lateness.map((l) => [`${l.employee_id}|${l.date}`, l])), [lateness]);
   const extra = useAsync(async () => {
     const employees: Employee[] = [];
@@ -955,9 +954,8 @@ function DownloadImage({
       const days = (list: string[], danger?: boolean): ImageCell =>
         list.length ? { text: `${list.length} día${list.length === 1 ? "" : "s"}`, badge: danger ? "danger" : "plain", sub: [list.map(dayTag).join(", ")] } : none;
       const columns: ImageColumn[] = [
+        // La imagen no lleva Huella ni Días con marca: solo lo que se revisa para la planilla.
         { label: "Empleado" },
-        { label: "Huella" },
-        { label: "Días con marca" },
         { label: "Llegadas tarde" },
         { label: "Nocturnidad" },
         { label: "Incapacidad" },
@@ -970,8 +968,6 @@ function DownloadImage({
         const dk = dayKinds(id, extra.data?.daysOff ?? [], lateness);
         return [
           { text: p.name ?? "", sub: p.code ? [p.code] : [] },
-          { text: p.badge, badge: "accent" },
-          { text: `${p.days.length} de ${periodDays}` },
           ls.days
             ? {
                 text: `${ls.days} día${ls.days === 1 ? "" : "s"}`,
