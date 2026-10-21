@@ -194,7 +194,10 @@ export function Dashboard() {
   return (
     <div className="page home">
       <section className="home-hero" aria-label="Hoy">
-        <img className="home-hero-photo" src="/inicio-banda.png" alt="" aria-hidden />
+        {/* Frase de la empresa en un globo de diálogo (recreada en código para que se vea nítida). */}
+        <figure className="home-quote">
+          <blockquote>Las grandes cosas son hechas por equipos de personas</blockquote>
+        </figure>
         <div className="home-hero-main">
           <p className="home-date">{fmtLongDate(now)}</p>
           <h1>

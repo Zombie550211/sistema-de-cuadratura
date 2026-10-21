@@ -913,18 +913,27 @@ button.lv-status:hover { filter: brightness(0.97); box-shadow: 0 0 0 1px current
    y tarjetas planas. Un solo acento (cian de la marca, oscurecido para contraste 4.5:1). */
 .page.home { max-width: none; gap: 20px; }
 .home-hero {
-  /* Texto a la izquierda, asistencia de hoy al centro y la foto (frontend/public/inicio-banda.png) a la
-     derecha, desvanecida hacia el azul tinta para que se lea como parte de la banda. */
+  /* Texto a la izquierda, asistencia de hoy al centro y la frase de la empresa a la derecha. */
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 360px) minmax(320px, 420px); gap: 32px; align-items: center;
   padding: 28px 32px; border-radius: var(--r-lg); color: #f8fafc; min-height: 260px; overflow: hidden;
   position: relative; background: #0f172a;
 }
-.home-hero > :not(.home-hero-photo) { position: relative; z-index: 1; }
-.home-hero-photo {
-  position: absolute; top: 0; right: 0; height: 100%; width: min(46%, 760px);
-  object-fit: cover; object-position: 72% 30%; pointer-events: none; user-select: none;
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, rgba(0, 0, 0, 0.6) 22%, #000 48%);
-  mask-image: linear-gradient(90deg, transparent 0, rgba(0, 0, 0, 0.6) 22%, #000 48%);
+/* Frase en globo de diálogo, en la tercera columna del banner. */
+.home-quote { grid-column: 3; grid-row: 1; justify-self: center; position: relative; margin: 0 0 14px; width: min(100%, 320px); }
+.home-quote blockquote {
+  position: relative; margin: 0; padding: 28px 36px; border-radius: var(--r-lg); background: #fff; color: #0f172a;
+  font-size: 18px; font-weight: 700; line-height: 1.35; letter-spacing: 0.01em; text-transform: uppercase; text-align: center;
+  box-shadow: 0 18px 40px rgba(2, 6, 23, 0.35);
+}
+.home-quote blockquote::before, .home-quote blockquote::after {
+  position: absolute; font-family: Georgia, "Times New Roman", serif; font-size: 64px; line-height: 1; font-weight: 700; color: #0e7490;
+}
+.home-quote blockquote::before { content: "\201C"; top: -18px; left: 12px; }
+.home-quote blockquote::after { content: "\201D"; bottom: -38px; right: 14px; }
+/* La cola del globo. */
+.home-quote::after {
+  content: ""; position: absolute; bottom: -12px; left: 50%; width: 24px; height: 24px; margin-left: -12px;
+  background: #fff; transform: rotate(45deg); border-radius: 0 0 4px 0;
 }
 .home-date { margin: 0; font-size: 14px; color: #cbd5e1; }
 .home-hero h1 { margin: 8px 0 0; font-size: 30px; font-weight: 650; color: #fff; }
@@ -1034,10 +1043,11 @@ a.home-kpi:hover .home-kpi-value { color: var(--accent-bright); }
 }
 @media (max-width: 1280px) {
   .home-hero { grid-template-columns: minmax(0, 1fr) minmax(280px, 340px) 260px; }
+  .home-quote blockquote { padding: 24px 20px; font-size: 15px; }
 }
 @media (max-width: 1000px) {
   .home-hero { grid-template-columns: minmax(0, 1fr); }
-  .home-hero-photo { display: none; }
+  .home-quote { display: none; }
   .home-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-kpi:nth-child(3) { border-left: 0; }
   .home-kpi:nth-child(n + 3) { border-top: 1px solid var(--line); }
