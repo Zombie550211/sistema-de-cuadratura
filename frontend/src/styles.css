@@ -690,6 +690,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sch-pop-chip:hover:not(:disabled) { border-color: var(--line-strong); background: var(--bg); }
 .sch-pop-chip.on { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); font-weight: 600; }
 .sch-pop-chip i { width: 10px; height: 10px; border-radius: 2px; }
+.sch-pop-chip.restore { border-color: #0e7490; color: #0e7490; font-weight: 600; }
+.sch-pop-chip.restore:hover:not(:disabled) { background: var(--accent-soft); border-color: #0e7490; }
+.sch-pop-chip.restore small { font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sch-pop-chip:disabled { opacity: 0.5; cursor: not-allowed; }
 .sch-pop-note { margin: 0 16px 12px; padding: 8px 10px; border-radius: var(--r-sm); background: #fef3c7; color: #92400e; font-size: 12px; }
 .sch-pop-foot { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--line); }
 .sch-pop-form label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

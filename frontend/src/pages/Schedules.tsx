@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-import { IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconSearch, IconSim, IconTrash, IconX } from "../components/Icons";
+import { IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconRepeat, IconSearch, IconSim, IconTrash, IconX } from "../components/Icons";
 import { ConfirmDelete } from "../components/RowMenu";
 import { Modal } from "../components/Modal";
 import { useCollapsedTeams } from "../components/TeamGroups";
@@ -57,6 +57,16 @@ const hourLabel = (h: number) => {
   const x = ((h % 24) + 24) % 24;
   return `${x === 0 ? 12 : x > 12 ? x - 12 : x}${x < 12 ? "a" : "p"}`;
 };
+
+/** El turno que más se repite (mismas horas y descanso) en una lista de turnos. */
+function mostCommonShift(list: ShiftAssignment[]): ShiftAssignment | undefined {
+  const counts = new Map<string, { a: ShiftAssignment; n: number }>();
+  for (const a of list) {
+    const k = `${fmtTime(a.start_at)}|${fmtTime(a.end_at)}|${a.break_minutes}`;
+    counts.set(k, { a: counts.get(k)?.a ?? a, n: (counts.get(k)?.n ?? 0) + 1 });
+  }
+  return [...counts.values()].sort((x, y) => y.n - x.n)[0]?.a;
+}
 
 const initials = (name: string) =>
   name
@@ -250,6 +260,30 @@ export function Schedules({ area }: { area: Area }) {
     );
   }
 
+  /** Turno de siempre de la persona: el que más se repite en la semana (mismas horas y descanso). */
+  function usualShift(e: Employee): ShiftAssignment | undefined {
+    return mostCommonShift(days.map((d) => byKey.get(`${e.id}|${d}`)).filter((a): a is ShiftAssignment => !!a));
+  }
+
+  /** Reponer horario: quita lo marcado en el día (libre, incapacidad…) y le vuelve a poner su
+   *  turno de siempre; asignar el turno también quita el día libre en el CRM. */
+  function restoreShift(a: ShiftAssignment) {
+    if (!pop) return;
+    const template = a.template_id ? templateById.get(a.template_id) : undefined;
+    return popAction(() =>
+      api.post("/schedules/assignments/bulk", {
+        employee_ids: [pop.employee.id],
+        date_from: pop.day,
+        date_to: pop.day,
+        weekdays: [pop.dayIndex],
+        ...(template?.is_active
+          ? { template_id: template.id }
+          : { start_time: fmtTime(a.start_at), end_time: fmtTime(a.end_at), break_minutes: a.break_minutes }),
+        overwrite: true,
+      }),
+    );
+  }
+
   function clearDay() {
     if (!pop?.current) return;
     return popAction(() => api.delete(`/schedules/assignments/${pop.current!.id}`));
@@ -272,6 +306,16 @@ export function Schedules({ area }: { area: Area }) {
   const activeTemplates = (templates.data ?? []).filter((t) => t.is_active);
   const popTemplate = pop?.current ? templateOf(pop.current) : undefined;
   const popOffKey = pop?.dayOff && (isNoShow(pop.dayOff) ? "no_show" : pop.dayOff.kind);
+  const popWeekUsual = pop && !pop.current ? usualShift(pop.employee) : undefined;
+  // Si en la semana no tiene turnos (p. ej. incapacidad toda la semana), se busca en las 6 anteriores.
+  const popHistory = useAsync(
+    () =>
+      pop && !pop.current && !popWeekUsual
+        ? api.get<ShiftAssignment[]>("/schedules/assignments", { date_from: addDays(days[0], -42), date_to: addDays(days[0], -1), employee_id: pop.employee.id })
+        : Promise.resolve(null),
+    [pop?.employee.id, pop?.day, !!popWeekUsual],
+  );
+  const popUsual = popWeekUsual ?? mostCommonShift(popHistory.data ?? []);
   let lastSection: string | null = null;
 
   // Resumen del día elegido para los indicadores de arriba.
@@ -656,6 +700,22 @@ export function Schedules({ area }: { area: Area }) {
             <div className="sch-pop-sec">
               <span className="sch-pop-label">Marcar el día como</span>
               <div className="sch-pop-chips">
+                {!pop.current && (
+                  <button
+                    className="sch-pop-chip restore"
+                    disabled={busy || !popUsual}
+                    title={popUsual ? `Quita lo marcado en el día y le pone su turno de siempre (${fmtTime(popUsual.start_at)}–${fmtTime(popUsual.end_at)})` : popHistory.loading ? "Buscando su horario de siempre…" : "No tiene turnos en las últimas 6 semanas para tomar su horario de siempre"}
+                    onClick={() => popUsual && restoreShift(popUsual)}
+                  >
+                    <IconRepeat width={12} height={12} />
+                    Reponer horario
+                    {popUsual && (
+                      <small>
+                        {fmtTime(popUsual.start_at)}–{fmtTime(popUsual.end_at)}
+                      </small>
+                    )}
+                  </button>
+                )}
                 {POP_DAY_OFF.map((o) => {
                   const on = o.key === popOffKey;
                   return (

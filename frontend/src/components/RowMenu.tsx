@@ -20,10 +20,16 @@ export function RowMenu({ actions, label = "Acciones" }: { actions: RowAction[];
   useEffect(() => {
     if (!pos) return;
     const close = () => setPos(null);
-    window.addEventListener("scroll", close, true);
+    // Solo el scroll de la página o de un contenedor del botón mueve el botón; el de otras partes
+    // (p. ej. la franja de asuetos que avanza sola en Compensatorios) no debe cerrar el menú.
+    const onScroll = (e: Event) => {
+      const t = e.target;
+      if (t === document || (t instanceof Node && btn.current && t.contains(btn.current))) close();
+    };
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", close);
     return () => {
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
     };
   }, [pos]);
