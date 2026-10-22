@@ -142,7 +142,7 @@ function UserModal({ user, isSelf, onClose, onSaved }: { user: User | null; isSe
               <option value="">Ninguno</option>
               {employees.data?.items.map((e) => (
                 <option key={e.id} value={e.id}>
-                  {e.full_name} · {e.code}
+                  {e.full_name}
                 </option>
               ))}
             </select>

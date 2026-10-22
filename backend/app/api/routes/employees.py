@@ -102,7 +102,6 @@ def list_employees(
         stmt = stmt.where(
             or_(
                 and_(*(full_name.ilike(f"%{word}%") for word in q.split())),
-                Employee.code.ilike(like),
                 Employee.badge_number == q.strip(),
                 Employee.dui.ilike(like),
                 Employee.user_code.ilike(like),
@@ -201,6 +200,7 @@ def import_roster(data: RosterImportIn, db: DB, user: HR):
 @router.post("/employees", response_model=EmployeeOut, status_code=status.HTTP_201_CREATED)
 def create_employee(data: EmployeeCreate, db: DB, user: HR):
     values = data.model_dump()
+    values.pop("code", None)  # el código ya no se usa: el sistema genera uno interno
     values["area"] = values["area"] or area_for(data.position, data.crm_agent_id)
     employee = Employee(**values)
     db.add(employee)
@@ -212,7 +212,7 @@ def create_employee(data: EmployeeCreate, db: DB, user: HR):
     relink_badge(db, employee.id, None, employee.badge_number)
     link_unmapped_punches(db)
     assign_user_codes(db, [employee])
-    audit.record(db, user, "crear", "employee", employee.id, {"codigo": employee.code})
+    audit.record(db, user, "crear", "employee", employee.id, {"nombre": employee.full_name})
     db.commit()
     db.refresh(employee)
     return employee
@@ -227,6 +227,7 @@ def update_employee(employee_id: int, data: EmployeeUpdate, db: DB, user: HR):
     old_badge = employee.badge_number
     changes = {}
     values = data.model_dump()
+    values.pop("code", None)  # el código ya no se usa: no se cambia
     if values["area"] is None:
         values["area"] = area_for(data.position, data.crm_agent_id) if data.position != employee.position else employee.area
     for field, value in values.items():
@@ -257,7 +258,7 @@ def delete_employee(employee_id: int, db: DB, user: HR):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
     audit.record(
         db, user, "eliminar", "employee", employee.id,
-        {"codigo": employee.code, "nombre": employee.full_name, "dui": employee.dui, "id_reloj": employee.badge_number},
+        {"nombre": employee.full_name, "dui": employee.dui, "id_reloj": employee.badge_number},
     )
     db.execute(sa_delete(Employee).where(Employee.id == employee.id))
     db.commit()

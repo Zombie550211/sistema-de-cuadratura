@@ -72,7 +72,7 @@ def test_links_employee_and_assigns_week(crm):
     emp_id = body["agents"][0]["employee_id"]
 
     emp = client.get(f"/api/employees/{emp_id}").json()
-    assert (emp["crm_agent_id"], emp["badge_number"], emp["code"]) == ("A-100", "83", "E-083")
+    assert (emp["crm_agent_id"], emp["badge_number"]) == ("A-100", "83")
     assert emp["department"]["name"] == "Ventas USA"
     assert client.get("/api/attendance/unmapped-badges").json() == []
 

@@ -111,10 +111,6 @@ export function EmployeeForm({ employee, initial, departments, readOnly, onClose
             <input {...text("last_name")} required />
           </label>
           <label className="field">
-            <span>Código de empleado *</span>
-            <input {...text("code")} required />
-          </label>
-          <label className="field">
             <span>ID de usuario</span>
             <input
               {...text("user_code")}

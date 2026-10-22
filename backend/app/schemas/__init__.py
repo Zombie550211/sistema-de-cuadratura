@@ -77,7 +77,8 @@ class DepartmentOut(ORM):
 
 
 class EmployeeBase(BaseModel):
-    code: str = Field(min_length=1, max_length=32)
+    # Ya no se usa: se ignora lo que venga (el sistema genera un código interno).
+    code: str | None = Field(default=None, max_length=32)
     # Vacío: se genera con las iniciales y el cumpleaños (KR1907).
     user_code: str | None = Field(default=None, max_length=16, pattern=r"^[A-Z]{2}\d{4}(-\d+)?$")
     badge_number: str | None = Field(default=None, max_length=32)

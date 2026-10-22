@@ -96,11 +96,6 @@ def split_name(full: str) -> tuple[str, str]:
     return " ".join(words[:i]).upper(), " ".join(words[i:]).upper()
 
 
-def _code(text: str) -> str:
-    # "4 CN" → "4 CN" (se conserva el formato de RRHH, sin espacios repetidos)
-    return re.sub(r"\s+", " ", text.strip()).upper()
-
-
 def _plain(text: str) -> str:
     return " ".join(unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode().upper().split())
 
@@ -219,7 +214,8 @@ def _parse_payroll(hn: int, header: str, headers: list[str], data) -> tuple[list
     seen: dict[str, int] = {}
     for n, cols in data:
         raw = "\t".join(cols)
-        name, code = " ".join(get(cols, "EMPLEADO").split()), _code(get(cols, "N"))
+        # La columna N° (código «22 CN») ya no se usa: se ignora.
+        name = " ".join(get(cols, "EMPLEADO").split())
         if not name:
             continue  # filas vacías o notas al pie de la hoja
         try:
@@ -228,14 +224,10 @@ def _parse_payroll(hn: int, header: str, headers: list[str], data) -> tuple[list
             errors.append(RosterError(n, raw, str(exc)))
             continue
         position = _title(get(cols, "CARGO")).capitalize()
-        if not code or not position:
-            rows.append(RosterRow(n, code or None, first_name, last, position, None,
-                                  skip="La fila no trae N° o cargo (¿columnas corridas?): no se importa."))
+        if not position:
+            rows.append(RosterRow(n, None, first_name, last, position, None,
+                                  skip="La fila no trae cargo (¿columnas corridas?): no se importa."))
             continue
-        if code in seen:
-            errors.append(RosterError(n, raw, f"N° repetido (ya aparece en la línea {seen[code]})"))
-            continue
-        seen[code] = n
         try:
             hire_date = _date(get(cols, "INGRESOS A HONORARIOS"))
             payroll_date = _date(get(cols, "INGRESO A PLANILLA"), "Fecha de ingreso a planilla")
@@ -273,7 +265,7 @@ def _parse_payroll(hn: int, header: str, headers: list[str], data) -> tuple[list
             "termination_date": datetime.strptime(ended[0], "%d/%m/%Y").date() if ended else None,
             "status": EmployeeStatus.inactivo if ending else EmployeeStatus.activo,
         }
-        rows.append(RosterRow(n, code, first_name, last, position, hire_date, extra=extra))
+        rows.append(RosterRow(n, None, first_name, last, position, hire_date, extra=extra))
     return rows, errors
 
 
@@ -286,12 +278,11 @@ def _parse_simple(text: str) -> tuple[list[RosterRow], list[RosterError]]:
             continue
         cols = [c.strip() for c in raw.split("\t")]
         if len(cols) < 4:
-            errors.append(RosterError(n, raw.strip(), "Se esperan 4 columnas separadas por tabulación: código, nombre, cargo, fecha de ingreso"))
+            errors.append(RosterError(n, raw.strip(), "Se esperan 4 columnas separadas por tabulación: N°, nombre, cargo, fecha de ingreso"))
             continue
-        code, name, position, hired = cols[:4]
+        # La primera columna es el código («22 CN»): ya no se usa, se ignora.
+        _, name, position, hired = cols[:4]
         try:
-            if not code:
-                raise ValueError("Falta el código")
             first, last = split_name(name)
             hire_date = datetime.strptime(hired, "%d/%m/%Y").date()
         except ValueError as exc:
@@ -300,12 +291,7 @@ def _parse_simple(text: str) -> tuple[list[RosterRow], list[RosterError]]:
                 msg = f"Fecha de ingreso inválida: {hired!r} (use dd/mm/aaaa)"
             errors.append(RosterError(n, raw.strip(), msg))
             continue
-        code = _code(code)
-        if code in seen:
-            errors.append(RosterError(n, raw.strip(), f"Código repetido (ya aparece en la línea {seen[code]})"))
-            continue
-        seen[code] = n
-        rows.append(RosterRow(n, code, first, last, _title(position).capitalize(), hire_date))
+        rows.append(RosterRow(n, None, first, last, _title(position).capitalize(), hire_date))
     return rows, errors
 
 
@@ -315,13 +301,12 @@ class RosterMatch:
     employee: Employee | None
     status: str  # nuevo | actualizar | sin_cambios | ambiguo
     note: str | None = None
-    keep_code: bool = False
 
 
 def _values(r: RosterRow) -> dict:
     """Lo que la fila fija en la ficha; lo que la fila no trae (código, huella, fecha) no se toca.
     En la planilla completa los campos vacíos sí se guardan vacíos (la planilla manda)."""
-    values = dict(code=r.code, first_name=r.first_name, last_name=r.last_name, position=r.position,
+    values = dict(first_name=r.first_name, last_name=r.last_name, position=r.position,
                   hire_date=r.hire_date, badge_number=r.badge)
     values = {k: v for k, v in values.items() if v is not None}
     if r.extra:
@@ -335,17 +320,16 @@ def _same(employee: Employee, values: dict) -> bool:
 
 
 def match_roster(db: Session, rows: list[RosterRow]) -> list[RosterMatch]:
-    """A qué ficha corresponde cada fila: por código, luego por huella y, si no, por nombre.
-    En la planilla completa, primero por nombre (su N° cambia entre versiones)."""
+    """A qué ficha corresponde cada fila: por huella y, si no, por nombre (el código ya no se usa).
+    En la planilla completa, primero por nombre."""
     employees = db.scalars(select(Employee)).all()
-    by_code = {e.code: e for e in employees}
     by_badge = {e.badge_number: e for e in employees if e.badge_number}
     keys = {e.id: name_key(e.full_name) for e in employees}
 
     def known(r: RosterRow) -> Employee | None:
         if r.extra or r.skip:
             return None
-        return by_code.get(r.code) or by_badge.get(r.badge)
+        return by_badge.get(r.badge)
 
     taken = {known(r).id for r in rows if known(r)}
     # Nombre exacto primero, para que un nombre corto del CRM no se lleve a otra persona.
@@ -372,43 +356,20 @@ def match_roster(db: Session, rows: list[RosterRow]) -> list[RosterMatch]:
                 e for e in free if min(len(keys[e.id]), len(k)) >= 2 and (keys[e.id] <= k or k <= keys[e.id])
             ]
             if len(found) > 1:
-                names = ", ".join(f"{e.code} {e.full_name}" for e in found)
-                result.append(RosterMatch(r, None, "ambiguo", f"El nombre coincide con varias fichas: {names}. Corrija el nombre en una o use su código."))
+                names = ", ".join(e.full_name for e in found)
+                result.append(RosterMatch(r, None, "ambiguo", f"El nombre coincide con varias fichas: {names}. Corrija el nombre en una o agregue la huella."))
                 continue
             if found:
                 employee = found[0]
                 taken.add(employee.id)
-                note = f"Se enlaza con {employee.code} {employee.full_name}"
+                note = f"Se enlaza con {employee.full_name}"
         if employee is None:
-            code = r.code or r.badge
-            if code is None:
-                result.append(RosterMatch(r, None, "ambiguo", "No está en el sistema y la fila no trae código ni huella para crearlo."))
-            else:
-                result.append(RosterMatch(r, None, "nuevo"))
+            result.append(RosterMatch(r, None, "nuevo"))
         elif _same(employee, _values(r)):
             result.append(RosterMatch(r, employee, "sin_cambios"))
         else:
             result.append(RosterMatch(r, employee, "actualizar", note))
 
-    # Un código que pasa a otra persona debe quedar libre: si lo tiene alguien que no viene en esta
-    # importación (o que no se actualiza), esa fila conserva su código o, si es nueva, no se crea.
-    # Se repite hasta que no cambie: quien conserva su código bloquea a su vez a quien lo quería.
-    changed = True
-    while changed:
-        changed = False
-        recoded = {m.employee.id for m in result if m.employee and m.status == "actualizar" and not m.keep_code}
-        for m in result:
-            holder = by_code.get(m.row.code) if m.row.code else None
-            if holder is None or (m.employee and holder.id == m.employee.id) or holder.id in recoded:
-                continue
-            if m.status == "nuevo":
-                m.status, m.note, changed = "ambiguo", f"El código {m.row.code} ya es de {holder.full_name}.", True
-            elif m.status == "actualizar" and not m.keep_code:
-                m.keep_code, changed = True, True
-                m.note = f"Conserva el código {m.employee.code}: {m.row.code} es de {holder.full_name}."
-    for m in result:
-        if m.keep_code and _same(m.employee, {k: v for k, v in _values(m.row).items() if k != "code"}):
-            m.status = "sin_cambios"
     return result
 
 
@@ -416,15 +377,9 @@ def apply_roster(db: Session, matches: list[RosterMatch]) -> dict[str, int]:
     """Crea o actualiza según match_roster; las filas ambiguas no se tocan. No hace commit."""
     counts = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0}
     created: list[Employee] = []
-    updates = [m for m in matches if m.status == "actualizar"]
-    # Los códigos se pueden intercambiar entre personas: primero se liberan con uno temporal.
-    for m in updates:
-        if not m.keep_code and m.row.code and m.employee.code != m.row.code:
-            m.employee.code = f"~{m.employee.id}"
-    db.flush()
     for m in matches:
         if m.status == "nuevo":
-            employee = Employee(**{"code": m.row.badge, "area": area_for(m.row.position), **_values(m.row)})
+            employee = Employee(**{"area": area_for(m.row.position), **_values(m.row)})
             db.add(employee)
             created.append(employee)
             db.flush()
@@ -433,8 +388,6 @@ def apply_roster(db: Session, matches: list[RosterMatch]) -> dict[str, int]:
         elif m.status == "actualizar":
             old_badge = m.employee.badge_number
             values = _values(m.row)
-            if m.keep_code:
-                values.pop("code", None)
             if m.row.position != m.employee.position:
                 m.employee.area = area_for(m.row.position, m.employee.crm_agent_id)
             for k, v in values.items():

@@ -22,6 +22,7 @@ def test_split_name(full, first, last):
 
 
 def test_parse_roster_reports_bad_lines():
+    # La primera columna (código «4 CN») ya no se usa: se ignora y no se valida.
     rows, errors = parse_roster(
         "4 CN\tIRANIA CECILIA SERRANO MEJIA\tSUPERVISORA DE VENTAS\t07/04/2021\n"
         "\n"
@@ -29,10 +30,10 @@ def test_parse_roster_reports_bad_lines():
         "4 cn\tOTRA PERSONA\tAGENTE\t01/01/2024\n"
         "sin columnas\n"
     )
-    assert [(r.code, r.position, r.hire_date) for r in rows] == [("4 CN", "Supervisora de ventas", date(2021, 4, 7))]
-    assert [e.line for e in errors] == [3, 4, 5]
+    assert [(r.code, r.position, r.hire_date) for r in rows] == [
+        (None, "Supervisora de ventas", date(2021, 4, 7)), (None, "Agente", date(2024, 1, 1))]
+    assert [e.line for e in errors] == [3, 5]
     assert "Fecha de ingreso inválida" in errors[0].message
-    assert "repetido" in errors[1].message
 
 
 ROSTER = (
@@ -51,7 +52,7 @@ def test_import_preview_then_apply_is_idempotent(login):
     applied = client.post("/api/employees/import", json={"text": ROSTER, "dry_run": False}).json()
     assert applied["applied"] is True
     emp = client.get("/api/employees", params={"q": "Pleitez"}).json()["items"][0]
-    assert (emp["code"], emp["first_name"], emp["last_name"], emp["hire_date"]) == ("28 CN", "BRYAN STANLEY", "SEGOVIA PLEITEZ", "2025-07-03")
+    assert (emp["first_name"], emp["last_name"], emp["hire_date"]) == ("BRYAN STANLEY", "SEGOVIA PLEITEZ", "2025-07-03")
 
     again = client.post("/api/employees/import", json={"text": ROSTER.replace("03/07/2025", "04/07/2025")}).json()
     assert (again["created"], again["updated"], again["unchanged"]) == (0, 1, 2)
@@ -90,7 +91,7 @@ def test_crm_agent_matched_to_roster_by_short_name(login):
     assert by_id["150"]["status"] == "error" and not by_id["150"]["employee_created"]  # no está en la planilla
     assert by_id["140"]["status"] == "error"  # "Cristian" solo no alcanza para decidir
     bryan = client.get("/api/employees", params={"q": "Pleitez"}).json()["items"][0]
-    assert (bryan["code"], bryan["crm_agent_id"], bryan["department"]["name"]) == ("28 CN", "123", "Team Irania Serrano")
+    assert (bryan["crm_agent_id"], bryan["department"]["name"]) == ("123", "Team Irania Serrano")
 
 
 @pytest.mark.parametrize(
@@ -114,14 +115,14 @@ def test_roster_links_employees_created_by_crm(login):
         "69 CN\tANDREA PAOLA SERRANO FLORES\tAGENTE DE VENTAS \t06/07/2026\n"
     )
     preview = client.post("/api/employees/import", json={"text": roster}).json()
-    status = {r["code"]: r["status"] for r in preview["rows"]}
-    assert status == {"9 CN": "actualizar", "69 CN": "ambiguo"}
+    status = {r["first_name"]: r["status"] for r in preview["rows"]}
+    assert status == {"MIGUEL EDUARDO": "actualizar", "ANDREA PAOLA": "ambiguo"}
 
     client.post("/api/employees/import", json={"text": roster, "dry_run": False})
     items = client.get("/api/employees").json()["items"]
     assert len(items) == 3  # no se duplicó nadie
     miguel = next(e for e in items if e["crm_agent_id"] == "150")
-    assert (miguel["code"], miguel["full_name"], miguel["hire_date"]) == ("9 CN", "MIGUEL EDUARDO NUÑEZ PEREZ", "2023-06-01")
+    assert (miguel["full_name"], miguel["hire_date"]) == ("MIGUEL EDUARDO NUÑEZ PEREZ", "2023-06-01")
     assert {e["full_name"] for e in items if e["crm_agent_id"] in ("152", "178")} == {"ANDREA FLORES", "ANDREA SERRANO"}
 
 
@@ -155,9 +156,9 @@ def test_listado_sets_badge_on_existing_and_creates_new(login):
 
     client.post("/api/employees/import", json={"text": LISTADO, "dry_run": False})
     bryan = client.get("/api/employees", params={"q": "Pleitez"}).json()["items"][0]
-    assert (bryan["code"], bryan["badge_number"], bryan["hire_date"]) == ("28 CN", "27", "2025-07-03")
+    assert (bryan["badge_number"], bryan["hire_date"]) == ("27", "2025-07-03")
     ana = client.get("/api/employees", params={"q": "Sofia"}).json()["items"][0]
-    assert (ana["code"], ana["badge_number"]) == ("18", "18")
+    assert ana["badge_number"] == "18"
 
     # Ya enlazados por huella: volver a importar no cambia nada.
     again = client.post("/api/employees/import", json={"text": LISTADO}).json()
@@ -183,9 +184,9 @@ def test_employees_filtered_by_area(login):
     client = login("rrhh")
     roster = ROSTER + "4 CN\tIRANIA CECILIA SERRANO MEJIA\tSUPERVISORA DE VENTAS\t07/04/2021\n"
     client.post("/api/employees/import", json={"text": roster, "dry_run": False})
-    areas = {e["code"]: e["area"] for e in client.get("/api/employees").json()["items"]}
-    assert areas == {"28 CN": "ventas", "60 CN": "ventas", "61 CN": "ventas", "4 CN": "ventas"}
-    assert [e["code"] for e in client.get("/api/employees").json()["items"] if e["is_supervisor"]] == ["4 CN"]
+    areas = {e["last_name"]: e["area"] for e in client.get("/api/employees").json()["items"]}
+    assert areas == {"SEGOVIA PLEITEZ": "ventas", "NIETO RIVERA": "ventas", "HERNANDEZ ORELLANA": "ventas", "SERRANO MEJIA": "ventas"}
+    assert [e["last_name"] for e in client.get("/api/employees").json()["items"] if e["is_supervisor"]] == ["SERRANO MEJIA"]
     assert client.get("/api/employees", params={"area": "supervisor"}).status_code == 422
 
     # RRHH la cambia a mano; se respeta mientras el cargo no cambie.
@@ -217,15 +218,15 @@ PLANILLA = "\t".join([
 
 def test_payroll_import_fills_the_whole_record(login):
     client = login("rrhh")
-    client.post("/api/employees/import", json={"text": ROSTER, "dry_run": False})  # Bryan ya existe como 28 CN
+    client.post("/api/employees/import", json={"text": ROSTER, "dry_run": False})  # Bryan ya existe
     preview = client.post("/api/employees/import", json={"text": PLANILLA}).json()
     assert preview["errors"] == []
     assert [(r["code"], r["status"], r["area"]) for r in preview["rows"]] == [
-        ("1 CN", "nuevo", "administrativo"), ("2 CN", "actualizar", "operativo"), (None, "ambiguo", None)]
+        (None, "nuevo", "administrativo"), (None, "actualizar", "operativo"), (None, "ambiguo", None)]
 
     client.post("/api/employees/import", json={"text": PLANILLA, "dry_run": False})
     bryan = client.get("/api/employees", params={"q": "Pleitez"}).json()["items"][0]
-    assert (bryan["code"], bryan["area"], bryan["base_salary"], bryan["badge_number"]) == ("2 CN", "operativo", "850.00", None)
+    assert (bryan["area"], bryan["base_salary"], bryan["badge_number"]) == ("operativo", "850.00", None)
     assert (bryan["status"], bryan["termination_date"], bryan["nit"], bryan["afp"]) == ("inactivo", "2026-09-27", None, "AFP Crecer")
     assert bryan["fingerprints"] == {"LA24 comedor": "89", "LB8": "27"}
     assert (bryan["has_cv"], bryan["has_nda"], bryan["has_memo"], bryan["birthday"]) == (True, True, False, "06-05")
@@ -238,15 +239,13 @@ def test_payroll_import_fills_the_whole_record(login):
     assert (again["created"], again["updated"], again["unchanged"]) == (0, 0, 2)
 
 
-def test_payroll_codes_can_swap_between_people(login):
+def test_payroll_code_is_ignored(login):
+    # El código de la planilla («28 CN») ya no se usa: no se guarda ni sirve para emparejar.
     client = login("rrhh")
-    client.post("/api/employees/import", json={"text": ROSTER, "dry_run": False})  # 28 CN Bryan, 60 CN Cristian…
-    swapped = PLANILLA.replace("1 CN\tANA SOFIA LOPEZ PEREZ", "60 CN\tCRISTIAN ANTONIO NIETO RIVERA").replace("2 CN\t", "28X\t")
-    swapped = swapped.replace("60 CN\tCRISTIAN", "28 CN\tCRISTIAN").replace("28X\t", "60 CN\t")
-    r = client.post("/api/employees/import", json={"text": swapped, "dry_run": False}).json()
-    assert r["applied"] is True
-    codes = {e["full_name"]: e["code"] for e in client.get("/api/employees", params={"limit": 50}).json()["items"]}
-    assert codes["CRISTIAN ANTONIO NIETO RIVERA"] == "28 CN" and codes["BRYAN STANLEY SEGOVIA PLEITEZ"] == "60 CN"
+    client.post("/api/employees/import", json={"text": ROSTER, "dry_run": False})
+    codes = [e["code"] for e in client.get("/api/employees").json()["items"]]
+    assert len(codes) == 3 and not any("CN" in c for c in codes)
+    assert client.get("/api/employees", params={"q": "28 CN"}).json()["total"] == 0
 
 
 @pytest.mark.parametrize(

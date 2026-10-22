@@ -275,7 +275,7 @@ export function Punches() {
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return people.filter((r) => !q || r.badge === q || !!r.name?.toLowerCase().includes(q) || !!r.code?.toLowerCase().includes(q));
+    return people.filter((r) => !q || r.badge === q || !!r.name?.toLowerCase().includes(q));
   }, [people, search]);
 
   const open = people.find((p) => p.key === openKey) ?? null;
@@ -327,7 +327,7 @@ export function Punches() {
           <label className="pn-search">
             <span className="sr-only">Buscar</span>
             <IconSearch width={16} height={16} aria-hidden />
-            <input className="input" placeholder="Buscar por nombre, código o huella" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <input className="input" placeholder="Buscar por nombre o huella" value={search} onChange={(e) => setSearch(e.target.value)} />
           </label>
           <label className="check">
             <input type="checkbox" checked={showDoubles} onChange={(e) => setShowDoubles(e.target.checked)} /> Dobles marcas
@@ -395,7 +395,6 @@ export function Punches() {
                             <span className="pn-avatar" aria-hidden>{initials(p.name)}</span>
                             <span>
                               <b>{p.name}</b>
-                              <span className="caption">{p.code}</span>
                             </span>
                           </div>
                         ) : (
@@ -732,7 +731,7 @@ function PersonQuincena({
   return (
     <Modal title={person.name ?? `ID ${person.badge} sin empleado`} onClose={onClose} wide>
       <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
-        {person.code && `${person.code} · `}Huella {person.badge} · {days.length} día{days.length === 1 ? "" : "s"} con marcas {isCut ? "hasta la fecha de corte" : "en la quincena"}
+        Huella {person.badge} · {days.length} día{days.length === 1 ? "" : "s"} con marcas {isCut ? "hasta la fecha de corte" : "en la quincena"}
       </p>
       <div className="row" style={{ gap: 12, marginBottom: 16, alignItems: "center" }}>
         <span className="sch-week">{isCut ? `Corte: ${fmtRange(range)}` : fmtRange(range)}</span>
@@ -967,7 +966,7 @@ function DownloadImage({
         const ns = nightSummary(p, lateByKey);
         const dk = dayKinds(id, extra.data?.daysOff ?? [], lateness);
         return [
-          { text: p.name ?? "", sub: p.code ? [p.code] : [] },
+          { text: p.name ?? "", sub: [] },
           ls.days
             ? {
                 text: `${ls.days} día${ls.days === 1 ? "" : "s"}`,
@@ -1191,7 +1190,7 @@ function EditPerson({
   return (
     <Modal title="Editar marcación" onClose={onDone} wide>
       <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
-        <b>{person.name ?? `ID ${person.badge} sin empleado`}</b> · {person.code && `${person.code} · `}Huella {person.badge} · {fmtRange(range)}
+        <b>{person.name ?? `ID ${person.badge} sin empleado`}</b> · Huella {person.badge} · {fmtRange(range)}
         <br />
         Solo cuenta la primera marca del día. Si corrige una hora, queda guardada la que marcó el reloj. La llegada tarde se calcula contra el horario del día.
       </p>
@@ -1447,11 +1446,10 @@ function LinkBadge({ row, onClose, onDone }: { row: DayRow; onClose: () => void;
     <Modal title={`Asignar huella ${row.badge}`} onClose={onClose}>
       <div className="stack">
         <p className="caption">Todas las marcas de la huella {row.badge} en este local quedarán a nombre de la persona que elija.</p>
-        <input className="input" autoFocus placeholder="Buscar empleado por nombre o código" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="input" autoFocus placeholder="Buscar empleado por nombre" value={q} onChange={(e) => setQ(e.target.value)} />
         {found.data?.items.map((e) => (
           <button key={e.id} className="btn ghost" style={{ justifyContent: "space-between" }} disabled={busy} onClick={() => link(e)}>
             <span>{e.full_name}</span>
-            <span className="caption">{e.code}</span>
           </button>
         ))}
         {found.data?.items.length === 0 && <div className="empty">No hay empleados con ese nombre.</div>}

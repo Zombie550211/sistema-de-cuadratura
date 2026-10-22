@@ -181,6 +181,8 @@ def test_rrhh_can_reschedule_a_shift(login):
 def test_search_by_full_name(login):
     client = login("rrhh")
     _employee(client, code="S-1", first_name="Cristhian Alexander", last_name="Sanchez Aparicio")
-    for q in ["CRISTHIAN ALEXANDER SANCHEZ APARICIO", "cristhian sanchez", "Aparicio Cristhian", "S-1"]:
+    for q in ["CRISTHIAN ALEXANDER SANCHEZ APARICIO", "cristhian sanchez", "Aparicio Cristhian"]:
         assert client.get("/api/employees", params={"q": q}).json()["total"] == 1, q
     assert client.get("/api/employees", params={"q": "Cristhian Lopez"}).json()["total"] == 0
+    # El código ya no se usa: no sirve para buscar.
+    assert client.get("/api/employees", params={"q": "S-1"}).json()["total"] == 0

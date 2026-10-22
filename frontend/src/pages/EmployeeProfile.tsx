@@ -83,7 +83,6 @@ export function EmployeeProfile({ employeeId, showBack = false }: { employeeId: 
             </div>
             <div className="ids">
               {e.user_code ? <span className="badge accent" title="ID de usuario">{e.user_code}</span> : <span className="badge warn" title="Se genera al cargar el cumpleaños">Sin ID de usuario</span>}
-              <span className="badge">{e.code}</span>
               {e.badge_number ? <span className="badge accent">Reloj {e.badge_number}</span> : <span className="badge warn">Sin ID de reloj</span>}
               {e.crm_agent_id ? <span className="badge accent">CRM {e.crm_agent_id}</span> : <span className="badge">Sin ID de CRM</span>}
               <span className={`badge${e.status === "activo" ? "" : " danger"}`}>{e.status}</span>

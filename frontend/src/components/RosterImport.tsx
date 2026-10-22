@@ -33,8 +33,8 @@ const STATUS = {
   ambiguo: ["Revisar", "danger"],
 } as const;
 
-/** Pegar la nómina de RRHH desde Excel: código, nombre completo, cargo, fecha de ingreso; o el
- *  listado de personal con encabezados, que trae la huella (ID de reloj) en vez del código. */
+/** Pegar la nómina de RRHH desde Excel: N°, nombre completo, cargo, fecha de ingreso; o el
+ *  listado de personal con encabezados, que trae la huella (ID de reloj). El N° / código se ignora. */
 export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<RosterResult | null>(null);
@@ -85,7 +85,7 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
             </button>
             <input ref={fileInput} type="file" accept=".xlsx,.xls" hidden onChange={(e) => e.target.files?.[0] && loadExcel(e.target.files[0])} />
           </div>
-          <span>O copie las columnas desde Excel y péguelas aquí: código · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa). También puede pegar la planilla completa de RRHH con sus encabezados (N°, EMPLEADO, CARGO, SUELDO…): se guardan sueldo, DUI, NIT, ISSS, AFP, cuenta, huellas, expediente y finalización. La columna de contraseñas se ignora.</span>
+          <span>O copie las columnas desde Excel y péguelas aquí: N° · nombre completo · cargo · fecha de ingreso (dd/mm/aaaa). El N° o código de empleado se ignora. También puede pegar la planilla completa de RRHH con sus encabezados (N°, EMPLEADO, CARGO, SUELDO…): se guardan sueldo, DUI, NIT, ISSS, AFP, cuenta, huellas, expediente y finalización. La columna de contraseñas se ignora.</span>
           <textarea
             className="input mono"
             rows={12}
@@ -119,7 +119,6 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
             <table className="table">
               <thead>
                 <tr>
-                  <th>Código</th>
                   <th>Huella</th>
                   <th>Nombres</th>
                   <th>Apellidos</th>
@@ -132,7 +131,6 @@ export function RosterImport({ onClose, onDone }: { onClose: () => void; onDone:
               <tbody>
                 {preview.rows.map((r) => (
                   <tr key={r.line}>
-                    <td className="mono">{r.code ?? "—"}</td>
                     <td className="mono">{r.badge ?? "—"}</td>
                     <td>{r.first_name}</td>
                     <td>{r.last_name}</td>

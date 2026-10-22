@@ -143,7 +143,7 @@ function LeaveView({ kind, area }: { kind: Kind; area: Area }) {
     if (filter === "hoy") return isOffToday(e.id);
     return true;
   };
-  const shown = all.filter((e) => matches(e) && (!search || e.full_name.toLowerCase().includes(search) || e.code.toLowerCase().includes(search)));
+  const shown = all.filter((e) => matches(e) && (!search || e.full_name.toLowerCase().includes(search)));
 
   // Indicadores de la sección (sin filtros ni búsqueda).
   const withPending = all.filter((e) => (vacationOf.get(e.id)?.pending ?? 0) > 0);
@@ -217,7 +217,7 @@ function LeaveView({ kind, area }: { kind: Kind; area: Area }) {
           <label className="pn-search">
             <span className="sr-only">Buscar</span>
             <IconSearch width={16} height={16} aria-hidden />
-            <input className="input" placeholder="Buscar por nombre o código" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input" placeholder="Buscar por nombre" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
           <div className="seg" role="radiogroup" aria-label="Mostrar">
             {filters.map(([value, text]) => (
@@ -326,8 +326,7 @@ function LeaveView({ kind, area }: { kind: Kind; area: Area }) {
                         <span>
                           <b>{e.full_name}</b>
                           <span className="caption">
-                            {e.code}
-                            {e.position && ` · ${e.position}`}
+                            {e.position}
                           </span>
                         </span>
                       </div>

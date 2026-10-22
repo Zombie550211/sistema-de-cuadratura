@@ -46,7 +46,7 @@ def importar_empleados(path: str, apply: bool) -> None:
         matches = match_roster(db, rows)
         for m in matches:
             if m.status != "sin_cambios":
-                print(f"{m.status:11} {m.row.code or m.row.badge or '':7} {m.row.first_name} {m.row.last_name}" + (f" — {m.note}" if m.note else ""))
+                print(f"{m.status:11} {m.row.badge or '':7} {m.row.first_name} {m.row.last_name}" + (f" — {m.note}" if m.note else ""))
         result = apply_roster(db, matches)
         if not apply:
             db.rollback()

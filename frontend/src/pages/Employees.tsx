@@ -102,7 +102,7 @@ export function Employees({ area }: { area: Area }) {
           <label className="pn-search">
             <span className="sr-only">Buscar</span>
             <IconSearch width={16} height={16} aria-hidden />
-            <input className="input" placeholder="Buscar por nombre, ID de usuario, código, DUI o ID de reloj" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input" placeholder="Buscar por nombre, ID de usuario, DUI o ID de reloj" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
           <div className="seg" role="radiogroup" aria-label="Estado">
             {(
@@ -181,7 +181,7 @@ export function Employees({ area }: { area: Area }) {
                     <td className="caption">{fmtDateTime(b.last_seen)}</td>
                     <td className="num">
                       {canEdit && (
-                        <button className="btn ghost sm" onClick={() => setEditing({ employee: null, initial: { area, badge_number: b.badge, code: `E-${b.badge.padStart(4, "0")}` } })}>
+                        <button className="btn ghost sm" onClick={() => setEditing({ employee: null, initial: { area, badge_number: b.badge } })}>
                           Crear empleado
                         </button>
                       )}
@@ -282,8 +282,7 @@ export function Employees({ area }: { area: Area }) {
                                 <span>
                                   <b>{e.full_name}</b>
                                   <span className="caption emp-sub">
-                                    {e.user_code && <span className="mono">{e.user_code} · </span>}
-                                    {e.code}
+                                    {e.user_code && <span className="mono">{e.user_code}</span>}
                                     {e.is_supervisor && <span className="sch-sup">Supervisor</span>}
                                   </span>
                                 </span>
@@ -383,7 +382,7 @@ export function Employees({ area }: { area: Area }) {
           }}
         >
           <p>
-            Se eliminará la ficha de <b>{deleting.full_name}</b> ({deleting.code}) junto con sus turnos y constancias emitidas. Esto no se
+            Se eliminará la ficha de <b>{deleting.full_name}</b> junto con sus turnos y constancias emitidas. Esto no se
             puede deshacer.
           </p>
           <p className="caption">Sus marcas del reloj se conservan, pero quedan sin nombre. Si la persona solo dejó de trabajar, mejor edítela y márquela como inactiva.</p>

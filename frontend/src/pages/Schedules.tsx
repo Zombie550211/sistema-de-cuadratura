@@ -795,7 +795,7 @@ export function Schedules({ area }: { area: Area }) {
           }}
         >
           <p>
-            Se eliminará la ficha de <b>{deleting.full_name}</b> ({deleting.code}) en todo el sistema: Empleados, Horarios, Marcaciones,
+            Se eliminará la ficha de <b>{deleting.full_name}</b> en todo el sistema: Empleados, Horarios, Marcaciones,
             vacaciones y constancias. Esto no se puede deshacer.
           </p>
           <p className="caption">Sus marcas del reloj se conservan, pero quedan sin nombre. Si la persona solo dejó de trabajar, mejor edítela y márquela como inactiva.</p>

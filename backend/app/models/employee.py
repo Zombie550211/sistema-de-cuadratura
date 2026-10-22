@@ -1,6 +1,7 @@
 import enum
 import re
 import unicodedata
+import uuid
 from datetime import date
 from decimal import Decimal
 
@@ -87,7 +88,9 @@ class Employee(TimestampMixin, Base):
     __tablename__ = "employees"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    # Código interno: ya no se usa ni se muestra (el de la planilla, «22 CN», se ignora); el
+    # sistema lo genera solo porque la columna es obligatoria y única.
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True, default=lambda: f"E-{uuid.uuid4().hex[:10].upper()}")
     # ID de usuario (ver user_code_base); se asigna una vez y no cambia si se corrige el nombre.
     user_code: Mapped[str | None] = mapped_column(String(16), unique=True, index=True)
     # ID con el que el empleado está registrado en el reloj de marcación.

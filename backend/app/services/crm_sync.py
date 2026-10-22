@@ -135,14 +135,14 @@ def _resolve_employee(db: Session, agent: CrmAgent) -> Employee:
             return matches[0]
         if len(matches) > 1:
             raise AgentError(
-                f"El nombre {nombre} coincide con varios empleados ({', '.join(f'{e.code} {e.full_name}' for e in matches)}): "
+                f"El nombre {nombre} coincide con varios empleados ({', '.join(e.full_name for e in matches)}): "
                 "ponga el ID de CRM en la ficha del empleado correcto"
             )
         linked = _name_matches(wanted, db.scalars(select(Employee).where(Employee.crm_agent_id.is_not(None))).all())
         if linked:
             raise AgentError(
                 f"El agente {nombre} coincide con "
-                f"{', '.join(f'{e.code} {e.full_name} (ID de CRM {e.crm_agent_id})' for e in linked)}, "
+                f"{', '.join(f'{e.full_name} (ID de CRM {e.crm_agent_id})' for e in linked)}, "
                 f"que ya está enlazado a otro agente del CRM: si es la misma persona, cambie el ID de CRM "
                 f"de la ficha a {agent.crm_agent_id}"
             )
@@ -170,7 +170,7 @@ def _apply_agent(
         owner = db.scalar(select(Employee).where(Employee.badge_number == agent.badge_number))
         if owner is not None and owner.id != employee.id:
             raise AgentError(
-                f"El ID de reloj {agent.badge_number} ya está asignado a {owner.full_name} ({owner.code})"
+                f"El ID de reloj {agent.badge_number} ya está asignado a {owner.full_name}"
             )
         employee.badge_number = agent.badge_number
         db.flush()

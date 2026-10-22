@@ -102,7 +102,7 @@ export function Compensatory() {
       if (filter === "saldo" && balance <= 0) return false;
       if (filter === "negativo" && balance >= 0) return false;
       if (picked && !statusOn(e.id, picked)) return false;
-      return !search || e.full_name.toLowerCase().includes(search) || e.code.toLowerCase().includes(search);
+      return !search || e.full_name.toLowerCase().includes(search);
     })
     // Con un asueto elegido, primero quienes lo trabajaron.
     .sort((a, b) => (picked ? Number(statusOn(b.id, picked) === "earned") - Number(statusOn(a.id, picked) === "earned") : 0));
@@ -230,7 +230,7 @@ export function Compensatory() {
           <label className="pn-search">
             <span className="sr-only">Buscar</span>
             <IconSearch width={16} height={16} aria-hidden />
-            <input className="input" placeholder="Buscar por nombre o código" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input" placeholder="Buscar por nombre" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
           <div className="seg" role="radiogroup" aria-label="Mostrar">
             {(
@@ -386,9 +386,9 @@ export function Compensatory() {
                         <span>
                           <b>{e.full_name}</b>
                           <span className="caption">
-                            {e.code}
-                            {e.position && ` · ${e.position}`}
-                            {area === "todas" && AREAS.find((x) => x.area === e.area)?.label !== e.position && ` · ${AREAS.find((x) => x.area === e.area)?.label ?? ""}`}
+                            {[e.position, area === "todas" && AREAS.find((x) => x.area === e.area)?.label !== e.position ? AREAS.find((x) => x.area === e.area)?.label : null]
+                              .filter(Boolean)
+                              .join(" · ")}
                           </span>
                         </span>
                       </div>
@@ -554,7 +554,7 @@ function CompensatoryDetail({
   return (
     <Modal
       title={`Compensatorio de ${employee.full_name}`}
-      subtitle={`${employee.code} · ${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"} · saldo ${balance > 0 ? `+${balance}` : balance} · desde el 15/09/2026`}
+      subtitle={`${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"} · saldo ${balance > 0 ? `+${balance}` : balance} · desde el 15/09/2026`}
       onClose={onClose}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
