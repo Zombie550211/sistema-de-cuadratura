@@ -9,7 +9,6 @@ import {
   type CutDate,
   type Device,
   ApiError,
-  DAY_OFF_LABEL,
   LATE_ALLOWANCE,
   localName,
   NIGHT_START,
@@ -23,7 +22,7 @@ import {
   type ShiftDayOff,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { dayOffColor, isNoShow, NO_SHOW } from "../lib/shiftColors";
+import { dayOffColor, dayOffLabel, isNoShow } from "../lib/shiftColors";
 import { addDays, fmtLongDate, fmtMinutes, fmtRange, fmtTime, fmtHms, fmtTimeSec, localDate, quincena, today } from "../lib/format";
 import { downloadBlob, tableImage, type ImageCell, type ImageColumn } from "../lib/tableImage";
 import { useAsync } from "../lib/useAsync";
@@ -790,7 +789,7 @@ function PersonQuincena({
                       ) : off ? (
                         <span title={off.notes ?? undefined}>
                           <span className="swatch" style={{ background: dayOffColor(off), borderRadius: 4, marginRight: 6 }} />
-                          {isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]}
+                          {dayOffLabel(off)}
                         </span>
                       ) : (
                         <span className="muted">{schedule.loading ? "…" : "Sin horario"}</span>
@@ -1082,7 +1081,7 @@ function LateCell({ late, off }: { late?: Lateness; off?: ShiftDayOff }) {
     return (
       <td className="nowrap">
         <span className="muted" title="Día de descanso en el horario: no cuenta como llegada tarde">
-          {isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]} · no cuenta
+          {dayOffLabel(off)} · no cuenta
         </span>
       </td>
     );
@@ -1305,7 +1304,7 @@ function DayShiftEditor({
             : shift
               ? shift.source === "crm" ? "Turno del CRM" : "Turno asignado aquí"
               : off
-                ? `${isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]} · al guardar se le pone turno`
+                ? `${dayOffLabel(off)} · al guardar se le pone turno`
                 : "Sin horario"}
         </span>
         <button className="btn sm" disabled={!dirty || busy || loading} onClick={save}>

@@ -25,7 +25,7 @@ import {
   type Sync,
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { ampm, DAY_OFF_COLOR, dayOffBand, dayOffColor, isNoShow, NO_SHOW, OTHER_SHIFT, SHIFT_KINDS, shiftColor, shiftLabel } from "../lib/shiftColors";
+import { ampm, DAY_OFF_COLOR, dayOffBand, dayOffColor, dayOffLabel, isNoShow, isWillRestore, NO_SHOW, OTHER_SHIFT, SHIFT_KINDS, shiftColor, shiftLabel, WILL_RESTORE } from "../lib/shiftColors";
 import { addDays, fmtDate, fmtDateTime, fmtLongDate, fmtRange, fmtShortDay, fmtTime, hhmm, hoursFrom, today, weekStart } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
@@ -292,8 +292,9 @@ export function Schedules({ area }: { area: Area }) {
   /** Marca el día (libre, compensatorio, suspendido…): quita el turno y, si ya había otro tipo, lo cambia. */
   function giveDayOff(opt: (typeof POP_DAY_OFF)[number]) {
     if (!pop) return;
-    // La nota «No se presentó» se pone o se quita; las demás notas del día se conservan.
-    const notes = opt.key === "no_show" ? NO_SHOW.label : pop.dayOff && isNoShow(pop.dayOff) ? "" : undefined;
+    // La nota «No se presentó» se pone o se quita (también «Repondrá horario»); las demás notas del día se conservan.
+    const notes =
+      opt.key === "no_show" ? NO_SHOW.label : pop.dayOff && (isNoShow(pop.dayOff) || isWillRestore(pop.dayOff)) ? "" : undefined;
     return popAction(() => api.post("/schedules/days-off", { employee_id: pop.employee.id, work_date: pop.day, kind: opt.kind, notes }));
   }
 
@@ -322,7 +323,7 @@ export function Schedules({ area }: { area: Area }) {
   const onShift = visible.filter((e) => byKey.has(`${e.id}|${day}`));
   const dayOffs = visible.map((e) => offByKey.get(`${e.id}|${day}`)).filter((d): d is ShiftDayOff => !!d);
   const offCounts = dayOffs.reduce((m, d) => {
-    const label = isNoShow(d) ? NO_SHOW.label : DAY_OFF_LABEL[d.kind];
+    const label = dayOffLabel(d);
     return m.set(label, (m.get(label) ?? 0) + 1);
   }, new Map<string, number>());
   const marks = onShift.map((e) => mark(e, byKey.get(`${e.id}|${day}`)));
@@ -484,6 +485,7 @@ export function Schedules({ area }: { area: Area }) {
               ["Suspendido", DAY_OFF_COLOR.suspendido],
               ["De baja", DAY_OFF_COLOR.baja],
               [NO_SHOW.label, NO_SHOW.color],
+              [WILL_RESTORE.label, WILL_RESTORE.color],
             ] as const
           ).map(([label, color]) => (
             <span key={label}>
@@ -599,7 +601,7 @@ export function Schedules({ area }: { area: Area }) {
                                     .filter(Boolean)
                                     .join(" · ")}
                                 >
-                                  {isNoShow(off) ? NO_SHOW.label : DAY_OFF_LABEL[off.kind]}
+                                  {dayOffLabel(off)}
                                 </span>
                               ) : (
                                 <span className="sch-empty">Sin turno</span>
@@ -610,7 +612,7 @@ export function Schedules({ area }: { area: Area }) {
                                 {days.map((d, i) => {
                                   const wa = byKey.get(`${e.id}|${d}`);
                                   const woff = offByKey.get(`${e.id}|${d}`);
-                                  const offLabel = woff && (isNoShow(woff) ? NO_SHOW.label : DAY_OFF_LABEL[woff.kind]);
+                                  const offLabel = woff && (dayOffLabel(woff));
                                   return (
                                     <span
                                       key={d}
@@ -657,9 +659,7 @@ export function Schedules({ area }: { area: Area }) {
                   {pop.current
                     ? `${fmtTime(pop.current.start_at)}–${fmtTime(pop.current.end_at)}`
                     : pop.dayOff
-                      ? isNoShow(pop.dayOff)
-                        ? NO_SHOW.label
-                        : DAY_OFF_LABEL[pop.dayOff.kind]
+                      ? dayOffLabel(pop.dayOff)
                       : "Sin turno"}
                 </span>
               </span>
