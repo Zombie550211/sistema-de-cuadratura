@@ -286,6 +286,7 @@ export function Punches() {
     <div className="page wide pn">
       <h1 className="sr-only">Marcaciones</h1>
 
+      <div className="page-sticky">
       <section className="pn-bar" aria-label="Periodo y local">
         <div className="pn-row">
           <div className="pn-group">
@@ -338,6 +339,7 @@ export function Punches() {
       </section>
 
       {people.length > 0 && <PeriodSummary people={people} periodDays={periodDays} lateByKey={lateByKey} daysOff={daysOff.data ?? []} lateness={late.data ?? []} />}
+      </div>
 
       {error && <div className="alert">{error}</div>}
       {data && data.total > data.items.length && (

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { IconCalendar, IconCheck, IconChevronLeft, IconChevronRight, IconPlus, IconSearch, IconX } from "../components/Icons";
+import { Modal } from "../components/Modal";
 import { RowMenu } from "../components/RowMenu";
 import { api, AREAS, type Area, type CompensatoryStatus, type Employee, type Holiday, type Page, type ShiftDayOff, type ShiftTemplate } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { fmtDate, today } from "../lib/format";
+import { addDays, fmtDate, today } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 import { CompensatoryModal } from "./EmployeeProfile";
 import { HolidaysModal, ranges, RemoveRange, type Range } from "./Leave";
@@ -31,8 +32,10 @@ const initials = (name: string) =>
 /** Compensatorios de una sección, vistos desde los asuetos: cada asueto trabajado gana un día
  *  compensatorio y cada día asignado lo gasta. Arriba los asuetos del año (quién trabajó cada
  *  uno), abajo la matriz persona × asueto con el saldo y las fechas asignadas. */
-export function Compensatory({ area }: { area: Area }) {
-  const section = AREAS.find((a) => a.area === area)!.label;
+export function Compensatory() {
+  // Todos los empleados activos de las tres secciones; el filtro de sección es opcional.
+  const [area, setArea] = useState<Area | "todas">("todas");
+  const section = area === "todas" ? "Todos los empleados" : AREAS.find((a) => a.area === area)!.label;
   const { can } = useAuth();
   const canEdit = can("admin", "rrhh");
   const navigate = useNavigate();
@@ -42,20 +45,29 @@ export function Compensatory({ area }: { area: Area }) {
   const [holidayId, setHolidayId] = useState<number | null>(null);
   const [assigning, setAssigning] = useState<number[] | null>(null);
   const [giving, setGiving] = useState<Employee | null>(null);
+  const [viewing, setViewing] = useState<Employee | null>(null);
   const [removing, setRemoving] = useState<{ employee: Employee; range: Range } | null>(null);
   const [editingHolidays, setEditingHolidays] = useState(false);
   const strip = useRef<HTMLDivElement>(null);
 
-  const employees = useAsync(() => api.get<Page<Employee>>("/employees", { status: "activo", area, limit: 500 }), [area]);
+  const employees = useAsync(async () => {
+    const items: Employee[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await api.get<Page<Employee>>("/employees", { status: "activo", limit: 500, offset });
+      items.push(...page.items);
+      if (items.length >= page.total || !page.items.length) break;
+    }
+    return items;
+  }, []);
   const templates = useAsync(() => (canEdit ? api.get<ShiftTemplate[]>("/schedules/templates") : Promise.resolve([])), [canEdit]);
   const holidays = useAsync(() => api.get<Holiday[]>("/schedules/holidays", { year }), [year]);
-  const comp = useAsync(() => api.get<CompensatoryStatus[]>("/schedules/compensatory", { area }), [area]);
+  const comp = useAsync(() => api.get<CompensatoryStatus[]>("/schedules/compensatory"), []);
   const days = useAsync(
     () => api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: `${year}-01-01`, date_to: `${year}-12-31`, kind: "compensatorio" }),
     [year],
   );
 
-  const all = employees.data?.items ?? [];
+  const all = useMemo(() => (employees.data ?? []).filter((e) => area === "todas" || e.area === area), [employees.data, area]);
   const now = today();
   const compOf = useMemo(() => new Map((comp.data ?? []).map((c) => [c.employee_id, c])), [comp.data]);
   const byEmployee = useMemo(() => {
@@ -170,13 +182,15 @@ export function Compensatory({ area }: { area: Area }) {
     <div className="page wide cp">
       <h1 className="sr-only">Días compensatorio · {section}</h1>
 
+      <div className="page-sticky">
       <section className="pn-bar" aria-label="Sección y filtros">
         <div className="pn-row">
           <nav className="seg" aria-label="Sección">
-            {AREAS.map((a) => (
-              <NavLink key={a.slug} to={`/compensatorios/${a.slug}`} className={({ isActive }) => `seg-link${isActive ? " on" : ""}`}>
+            {[{ area: "todas" as const, label: "Todas" }, ...AREAS].map((a) => (
+              <button key={a.area} type="button" aria-pressed={area === a.area} className={area === a.area ? "on" : undefined} onClick={() => setArea(a.area)}>
                 {a.label}
-              </NavLink>
+                <span className="seg-count">{(employees.data ?? []).filter((e) => a.area === "todas" || e.area === a.area).length}</span>
+              </button>
             ))}
           </nav>
           <span className="spacer" />
@@ -260,6 +274,7 @@ export function Compensatory({ area }: { area: Area }) {
           <dd className="home-kpi-note">{nextHoliday ? nextHoliday.name : `No quedan asuetos en ${year}`}</dd>
         </div>
       </dl>
+      </div>
 
       {(employees.error || comp.error || days.error || holidays.error) && <div className="alert">{employees.error ?? comp.error ?? days.error ?? holidays.error}</div>}
 
@@ -373,6 +388,7 @@ export function Compensatory({ area }: { area: Area }) {
                           <span className="caption">
                             {e.code}
                             {e.position && ` · ${e.position}`}
+                            {area === "todas" && AREAS.find((x) => x.area === e.area)?.label !== e.position && ` · ${AREAS.find((x) => x.area === e.area)?.label ?? ""}`}
                           </span>
                         </span>
                       </div>
@@ -391,12 +407,12 @@ export function Compensatory({ area }: { area: Area }) {
                       );
                     })}
                     <td>
-                      <div className="cp-balance" title={`${earned} ganados · ${taken} asignados`}>
+                      <button type="button" className="cp-balance" title="Ver compensatorio: pendientes y tomados" onClick={() => setViewing(e)}>
                         <span className={`lv-pill${balance > 0 ? " warn" : balance < 0 ? " bad" : " ok"}`}>{balance > 0 ? `+${balance}` : balance}</span>
                         <span className="caption nowrap">
                           {earned} ganado{earned === 1 ? "" : "s"} · {taken} usado{taken === 1 ? "" : "s"}
                         </span>
-                      </div>
+                      </button>
                     </td>
                     <td>
                       {mine.length ? (
@@ -426,8 +442,8 @@ export function Compensatory({ area }: { area: Area }) {
                         <RowMenu
                           label={`Acciones de ${e.full_name}`}
                           actions={[
+                            { label: "Ver compensatorio", onClick: () => setViewing(e) },
                             ...(c?.available.length ? [{ label: "Dar un compensatorio ganado (elegir asueto y día)", onClick: () => setGiving(e) }] : []),
-                            { label: "Asignar compensatorio en fechas", onClick: () => setAssigning([e.id]) },
                             { label: "Ver ficha", onClick: () => navigate(`/empleados/${e.id}`) },
                           ]}
                         />
@@ -457,6 +473,18 @@ export function Compensatory({ area }: { area: Area }) {
           onDone={done}
         />
       )}
+      {viewing && (
+        <CompensatoryDetail
+          employee={viewing}
+          status={compOf.get(viewing.id)}
+          canEdit={canEdit}
+          onGive={() => {
+            setGiving(viewing);
+            setViewing(null);
+          }}
+          onClose={() => setViewing(null)}
+        />
+      )}
       {giving && <CompensatoryModal employee={giving} initialMonth={now.slice(0, 7)} onClose={() => setGiving(null)} onDone={done} />}
       {editingHolidays && (
         <HolidaysModal
@@ -474,3 +502,132 @@ export function Compensatory({ area }: { area: Area }) {
   );
 }
 
+/** Cada día compensatorio tomado con el asueto que compensa: el que trae en la nota (dd/mm/aaaa)
+ *  o, si la nota no dice, el asueto ganado más antiguo que quede (igual que el saldo del servidor). */
+function takenWithHoliday(earned: Holiday[], taken: ShiftDayOff[]): { day: ShiftDayOff; holiday: Holiday | null }[] {
+  const left = [...earned].sort((a, b) => a.day.localeCompare(b.day));
+  const sorted = [...taken].sort((a, b) => a.work_date.localeCompare(b.work_date));
+  const out = new Map<number, Holiday | null>();
+  for (const d of sorted) {
+    const h = left.find((x) => (d.notes ?? "").includes(fmtDate(x.day)));
+    if (h) {
+      out.set(d.id, h);
+      left.splice(left.indexOf(h), 1);
+    }
+  }
+  for (const d of sorted) if (!out.has(d.id)) out.set(d.id, left.shift() ?? null);
+  return sorted.map((d) => ({ day: d, holiday: out.get(d.id) ?? null }));
+}
+
+const longDay = new Intl.DateTimeFormat("es-SV", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" });
+const fmtLong = (ymd: string) => longDay.format(new Date(`${ymd}T00:00:00Z`));
+
+/** Ver compensatorio: los pendientes (asuetos trabajados sin usar) y los tomados (qué asueto
+ *  compensa cada día y qué día se tomó), desde el inicio el 15/09/2026. */
+function CompensatoryDetail({
+  employee,
+  status,
+  canEdit,
+  onGive,
+  onClose,
+}: {
+  employee: Employee;
+  status?: CompensatoryStatus;
+  canEdit: boolean;
+  onGive: () => void;
+  onClose: () => void;
+}) {
+  const taken = useAsync(
+    () =>
+      api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: START, date_to: addDays(START, 366), kind: "compensatorio" }).then((list) =>
+        list.filter((d) => d.employee_id === employee.id),
+      ),
+    [employee.id],
+  );
+  const earned = status?.earned ?? [];
+  const pending = status?.available ?? [];
+  const lost = status?.lost ?? [];
+  const rows = takenWithHoliday(earned, taken.data ?? []);
+  const balance = status?.balance ?? 0;
+  const now = today();
+
+  return (
+    <Modal
+      title={`Compensatorio de ${employee.full_name}`}
+      subtitle={`${employee.code} · ${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"} · saldo ${balance > 0 ? `+${balance}` : balance} · desde el 15/09/2026`}
+      onClose={onClose}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <section className="modal-sec">
+          <span className="modal-label">
+            Pendientes<small>asuetos trabajados que aún no se toman</small>
+          </span>
+          {pending.length ? (
+            <ul className="cp-list">
+              {pending.map((h) => (
+                <li key={h.id}>
+                  <span className="cp-list-date">{fmtDate(h.day)}</span>
+                  <span className="cp-list-main">
+                    <b>{h.name}</b>
+                    <small>Trabajó el asueto · compensatorio por tomar</small>
+                  </span>
+                  <span className="lv-status warn">Pendiente</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="caption">No tiene compensatorios pendientes.</span>
+          )}
+        </section>
+
+        <section className="modal-sec">
+          <span className="modal-label">
+            Tomados<small>qué asueto compensa y qué día se tomó</small>
+          </span>
+          {taken.error && <div className="alert">{taken.error}</div>}
+          {taken.loading && !taken.data ? (
+            <span className="caption">Cargando…</span>
+          ) : rows.length ? (
+            <ul className="cp-list">
+              {rows.map(({ day, holiday }) => (
+                <li key={day.id}>
+                  <span className="cp-list-date">{fmtDate(day.work_date)}</span>
+                  <span className="cp-list-main">
+                    <b>{holiday ? `Compensa el ${fmtDate(holiday.day)} · ${holiday.name}` : "Sin asueto que lo respalde"}</b>
+                    <small>
+                      Lo tomó el {fmtLong(day.work_date)}
+                      {day.source === "crm" ? " · marcado en el CRM" : " · asignado por RRHH"}
+                      {day.notes && !holiday ? ` · ${day.notes}` : ""}
+                    </small>
+                  </span>
+                  <span className={`lv-status${holiday ? " ok" : " warn"}`}>{day.work_date > now ? "Programado" : holiday ? "Tomado" : "Saldo negativo"}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="caption">Todavía no ha tomado ningún compensatorio.</span>
+          )}
+        </section>
+
+        {lost.length > 0 && (
+          <section className="modal-sec">
+            <span className="modal-label">
+              Perdidos<small>asuetos en los que no marcó</small>
+            </span>
+            <span className="caption">{lost.map((h) => `${fmtDate(h.day)} · ${h.name}`).join(" — ")}</span>
+          </section>
+        )}
+      </div>
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose}>
+          Cerrar
+        </button>
+        {canEdit && pending.length > 0 && (
+          <button className="btn" onClick={onGive}>
+            Dar un compensatorio pendiente
+          </button>
+        )}
+      </div>
+    </Modal>
+  );
+}

@@ -97,6 +97,7 @@ export function Schedules({ area }: { area: Area }) {
   const [query, setQuery] = useState("");
   const [team, setTeam] = useState("all");
   const [pop, setPop] = useState<Pop | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [deleting, setDeleting] = useState<Employee | null>(null);
   const [assigning, setAssigning] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -199,6 +200,7 @@ export function Schedules({ area }: { area: Area }) {
 
   function openPop(ev: MouseEvent, e: Employee) {
     if (!canEdit) return;
+    setRestoring(false);
     // Junto al clic, pero subiendo lo necesario para que la ventana (~720 px) quepa en pantalla.
     const top = Math.max(8, Math.min(ev.clientY + 12, window.innerHeight - 728));
     setError(null);
@@ -267,18 +269,16 @@ export function Schedules({ area }: { area: Area }) {
 
   /** Reponer horario: quita lo marcado en el día (libre, incapacidad…) y le vuelve a poner su
    *  turno de siempre; asignar el turno también quita el día libre en el CRM. */
-  function restoreShift(a: ShiftAssignment) {
+  function restoreShift(r: RestoreForm) {
     if (!pop) return;
-    const template = a.template_id ? templateById.get(a.template_id) : undefined;
     return popAction(() =>
       api.post("/schedules/assignments/bulk", {
         employee_ids: [pop.employee.id],
         date_from: pop.day,
         date_to: pop.day,
         weekdays: [pop.dayIndex],
-        ...(template?.is_active
-          ? { template_id: template.id }
-          : { start_time: fmtTime(a.start_at), end_time: fmtTime(a.end_at), break_minutes: a.break_minutes }),
+        ...(r.templateId ? { template_id: r.templateId } : { start_time: r.start, end_time: r.end, break_minutes: r.breakMinutes }),
+        notes: ["Reposición de horario", r.note.trim()].filter(Boolean).join(": "),
         overwrite: true,
       }),
     );
@@ -339,6 +339,8 @@ export function Schedules({ area }: { area: Area }) {
     <div className="page wide sch">
       <h1 className="sr-only">Horarios · {section}</h1>
 
+      {/* Semana, días e indicadores quedan fijos arriba al bajar por el tablero. */}
+      <div className="sch-sticky">
       <section className="pn-bar" aria-label="Semana y filtros">
         <div className="pn-row">
           <div className="pn-group">
@@ -444,6 +446,8 @@ export function Schedules({ area }: { area: Area }) {
           </dd>
         </div>
       </dl>
+
+      </div>
 
       {(assignments.error || punches.error) && <div className="alert">{assignments.error || punches.error}</div>}
 
@@ -669,6 +673,7 @@ export function Schedules({ area }: { area: Area }) {
             </div>
             {error && <div className="alert">{error}</div>}
 
+            {!restoring && (
             <div className="sch-pop-sec">
               <span className="sch-pop-label">Turno base</span>
               {activeTemplates.length ? (
@@ -694,7 +699,21 @@ export function Schedules({ area }: { area: Area }) {
                 </button>
               )}
             </div>
+            )}
 
+            {restoring && !pop.current ? (
+              <RestorePanel
+                key={`${pop.employee.id}|${pop.day}`}
+                usual={popUsual}
+                loadingUsual={popHistory.loading}
+                templates={activeTemplates}
+                templateOf={templateOf}
+                busy={busy}
+                onCancel={() => setRestoring(false)}
+                onSave={restoreShift}
+              />
+            ) : (
+              <>
             <ShiftEditor key={`${pop.employee.id}|${pop.day}`} current={pop.current} day={pop.day} busy={busy} onSave={saveCustom} />
 
             <div className="sch-pop-sec">
@@ -703,17 +722,12 @@ export function Schedules({ area }: { area: Area }) {
                 {!pop.current && (
                   <button
                     className="sch-pop-chip restore"
-                    disabled={busy || !popUsual}
-                    title={popUsual ? `Quita lo marcado en el día y le pone su turno de siempre (${fmtTime(popUsual.start_at)}–${fmtTime(popUsual.end_at)})` : popHistory.loading ? "Buscando su horario de siempre…" : "No tiene turnos en las últimas 6 semanas para tomar su horario de siempre"}
-                    onClick={() => popUsual && restoreShift(popUsual)}
+                    disabled={busy}
+                    title="Quita lo marcado en el día y le asigna un horario: el de siempre, uno de los turnos base o uno nuevo"
+                    onClick={() => setRestoring(true)}
                   >
                     <IconRepeat width={12} height={12} />
                     Reponer horario
-                    {popUsual && (
-                      <small>
-                        {fmtTime(popUsual.start_at)}–{fmtTime(popUsual.end_at)}
-                      </small>
-                    )}
                   </button>
                 )}
                 {POP_DAY_OFF.map((o) => {
@@ -740,6 +754,8 @@ export function Schedules({ area }: { area: Area }) {
                 </span>
               )}
             </div>
+              </>
+            )}
 
             {pop.current?.source === "crm" && (
               <div className="sch-pop-note">Este turno vino del CRM. Lo que cambie aquí (horas, reagendar, quitar o dar el día libre) también se cambia en el horario del CRM.</div>
@@ -793,6 +809,109 @@ export function Schedules({ area }: { area: Area }) {
 }
 
 type ShiftForm = { date: string; start: string; end: string; breakMinutes: number };
+type RestoreForm = { templateId: number | null; start: string; end: string; breakMinutes: number; note: string };
+
+/** Reponer horario: elegir su horario de siempre, uno de los turnos base o uno nuevo, con nota. */
+function RestorePanel({
+  usual,
+  loadingUsual,
+  templates,
+  templateOf,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  usual?: ShiftAssignment;
+  loadingUsual: boolean;
+  templates: ShiftTemplate[];
+  templateOf: (a: ShiftAssignment) => ShiftTemplate | undefined;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (r: RestoreForm) => void;
+}) {
+  const usualTemplate = usual ? templateOf(usual) : undefined;
+  const [choice, setChoice] = useState<string>(() => (usual ? "usual" : templates[0] ? `t:${templates[0].id}` : "nuevo"));
+  const [start, setStart] = useState(usual ? fmtTime(usual.start_at) : "08:00");
+  const [end, setEnd] = useState(usual ? fmtTime(usual.end_at) : "17:00");
+  const [breakMinutes, setBreakMinutes] = useState(usual?.break_minutes ?? 60);
+  const [note, setNote] = useState("");
+  // Si el de siempre llega después (se busca en semanas anteriores), queda elegido.
+  useEffect(() => {
+    if (usual && choice !== "usual" && choice === (templates[0] ? `t:${templates[0].id}` : "nuevo")) setChoice("usual");
+  }, [usual]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (choice === "usual" && usual) {
+      onSave(
+        usualTemplate?.is_active
+          ? { templateId: usualTemplate.id, start: "", end: "", breakMinutes: 0, note }
+          : { templateId: null, start: fmtTime(usual.start_at), end: fmtTime(usual.end_at), breakMinutes: usual.break_minutes, note },
+      );
+    } else if (choice.startsWith("t:")) {
+      onSave({ templateId: Number(choice.slice(2)), start: "", end: "", breakMinutes: 0, note });
+    } else {
+      onSave({ templateId: null, start, end, breakMinutes, note });
+    }
+  }
+
+  const option = (value: string, title: string, hours: string, color?: string) => (
+    <label key={value} className={`sch-restore-opt${choice === value ? " on" : ""}`}>
+      <input type="radio" name="reponer" value={value} checked={choice === value} onChange={() => setChoice(value)} />
+      {color && <i style={{ background: color }} />}
+      <span>
+        <b>{title}</b>
+        <small>{hours}</small>
+      </span>
+    </label>
+  );
+
+  return (
+    <form className="sch-pop-sec sch-restore" onSubmit={submit}>
+      <span className="sch-pop-label">Reponer horario: quita lo marcado en el día y le asigna</span>
+      <div className="sch-restore-list">
+        {usual
+          ? option(
+              "usual",
+              "Su horario de siempre",
+              `${fmtTime(usual.start_at)}–${fmtTime(usual.end_at)}${usualTemplate ? ` · ${usualTemplate.name}` : ""}`,
+              shiftColor(fmtTime(usual.start_at), fmtTime(usual.end_at)),
+            )
+          : loadingUsual && <span className="caption">Buscando su horario de siempre…</span>}
+        {templates.map((t) => option(`t:${t.id}`, t.name, `${hhmm(t.start_time)}–${hhmm(t.end_time)}${t.break_minutes ? ` · ${t.break_minutes} min desc.` : ""}`, shiftColor(hhmm(t.start_time), hhmm(t.end_time))))}
+        {option("nuevo", "Nuevo horario", "Entrada, salida y descanso a mano")}
+      </div>
+      {choice === "nuevo" && (
+        <div className="sch-pop-times">
+          <label>
+            <span className="caption">Entrada</span>
+            <input className="input" type="time" required value={start} onChange={(e) => setStart(e.target.value)} />
+          </label>
+          <label>
+            <span className="caption">Salida</span>
+            <input className="input" type="time" required value={end} onChange={(e) => setEnd(e.target.value)} />
+          </label>
+          <label>
+            <span className="caption">Desc. (min)</span>
+            <input className="input" type="number" min={0} max={480} required value={breakMinutes} onChange={(e) => setBreakMinutes(Number(e.target.value))} />
+          </label>
+        </div>
+      )}
+      <label className="sch-restore-note">
+        <span className="caption">Nota (opcional)</span>
+        <input className="input" maxLength={400} placeholder="Ej. repone el permiso del lunes" value={note} onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <div className="sch-restore-foot">
+        <button type="button" className="btn ghost sm" onClick={onCancel} disabled={busy}>
+          Cancelar
+        </button>
+        <button className="btn sm" disabled={busy || (choice === "nuevo" && start === end)}>
+          {busy ? "Reponiendo…" : "Reponer horario"}
+        </button>
+      </div>
+    </form>
+  );
+}
 
 /** Horas a mano para el día; con turno, también la fecha para reagendarlo. */
 function ShiftEditor({ current, day, busy, onSave }: { current?: ShiftAssignment; day: string; busy: boolean; onSave: (f: ShiftForm) => void }) {

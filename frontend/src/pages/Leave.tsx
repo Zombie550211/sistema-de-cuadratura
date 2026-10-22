@@ -82,7 +82,7 @@ const rangeLabel = (r: Range) => (r.from === r.to ? short(r.from) : `${short(r.f
 /** Días de vacación o compensatorios de una sección: todos sus empleados, con los días que
  *  tienen en el año. Se asignan con el mismo modal de Horarios y se quitan desde aquí. */
 export function Leave({ kind, area }: { kind: Kind; area: Area }) {
-  return kind === "compensatorio" ? <Compensatory area={area} /> : <LeaveView kind={kind} area={area} />;
+  return kind === "compensatorio" ? <Compensatory /> : <LeaveView kind={kind} area={area} />;
 }
 
 function LeaveView({ kind, area }: { kind: Kind; area: Area }) {
@@ -182,6 +182,7 @@ function LeaveView({ kind, area }: { kind: Kind; area: Area }) {
         {label} · {section}
       </h1>
 
+      <div className="page-sticky">
       <section className="pn-bar" aria-label="Sección y filtros">
         <div className="pn-row">
           <nav className="seg" aria-label="Sección">
@@ -275,6 +276,7 @@ function LeaveView({ kind, area }: { kind: Kind; area: Area }) {
           </div>
         </dl>
       )}
+      </div>
 
       {(employees.error || days.error || comp.error || vacations.error) && <div className="alert">{employees.error ?? days.error ?? comp.error ?? vacations.error}</div>}
 

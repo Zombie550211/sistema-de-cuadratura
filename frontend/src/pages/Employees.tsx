@@ -71,6 +71,7 @@ export function Employees({ area }: { area: Area }) {
     <div className="page wide emp">
       <h1 className="sr-only">Empleados · {section.label}</h1>
 
+      <div className="page-sticky">
       <section className="pn-bar" aria-label="Sección y filtros">
         <div className="pn-row">
           <nav className="seg" aria-label="Sección">
@@ -145,6 +146,7 @@ export function Employees({ area }: { area: Area }) {
           </dd>
         </div>
       </dl>
+      </div>
 
       {showUnmapped && !!unmapped.data?.length && (
         <div className="card emp-card">

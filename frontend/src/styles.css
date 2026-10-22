@@ -555,6 +555,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sch-day:not(.on) .sch-day-meter i { background: var(--muted-2); }
 .sch-day-count { font-size: 12px; font-variant-numeric: tabular-nums; }
 .sch-kpis { margin: 0; }
+/* Barra de controles e indicadores fijos arriba al hacer scroll (Horarios, Empleados, Vacaciones,
+   Compensatorios, Marcaciones). En celulares no: taparían casi toda la pantalla. */
+.sch-sticky, .page-sticky { position: sticky; top: 0; z-index: 25; display: flex; flex-direction: column; gap: 12px; margin-top: -16px; padding: 16px 0 12px; background: var(--bg); }
+@media (max-width: 860px) { .sch-sticky, .page-sticky { position: static; margin-top: 0; padding: 0; } }
 
 /* Calendario del mes para elegir un día (compensatorios). */
 .month-cal { display: flex; flex-direction: column; gap: 8px; }
@@ -690,6 +694,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sch-pop-chip:hover:not(:disabled) { border-color: var(--line-strong); background: var(--bg); }
 .sch-pop-chip.on { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); font-weight: 600; }
 .sch-pop-chip i { width: 10px; height: 10px; border-radius: 2px; }
+.sch-restore-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; scrollbar-width: thin; }
+.sch-restore-opt { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); cursor: pointer; }
+.sch-restore-opt:hover { background: var(--bg); }
+.sch-restore-opt.on { border-color: #0f172a; box-shadow: inset 0 0 0 1px #0f172a; }
+.sch-restore-opt input { accent-color: #0f172a; margin: 0; }
+.sch-restore-opt i { flex: none; width: 4px; align-self: stretch; border-radius: 2px; }
+.sch-restore-opt span { display: flex; flex-direction: column; min-width: 0; }
+.sch-restore-opt b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sch-restore-opt small { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sch-restore-note { display: flex; flex-direction: column; gap: 2px; }
+.sch-restore-foot { display: flex; justify-content: flex-end; gap: 6px; }
 .sch-pop-chip.restore { border-color: #0e7490; color: #0e7490; font-weight: 600; }
 .sch-pop-chip.restore:hover:not(:disabled) { background: var(--accent-soft); border-color: #0e7490; }
 .sch-pop-chip.restore small { font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -834,7 +849,15 @@ button.lv-status:hover { filter: brightness(0.97); box-shadow: 0 0 0 1px current
 .cp-cell { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; border: 1px dashed var(--line-strong); color: #fff; vertical-align: middle; }
 .cp-cell.earned { background: #15803d; border: 1px solid #15803d; }
 .cp-cell.lost { background: #fee2e2; border: 1px solid #fca5a5; }
-.cp-balance { display: flex; align-items: center; gap: 8px; }
+.cp-balance { display: flex; align-items: center; gap: 8px; padding: 4px 6px; margin: -4px -6px; border: 0; border-radius: var(--r-sm); background: none; color: inherit; font: inherit; cursor: pointer; }
+.cp-balance:hover { background: var(--surface-2); }
+.cp-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--r-md); }
+.cp-list li { display: flex; align-items: center; gap: 14px; padding: 10px 14px; }
+.cp-list li + li { border-top: 1px solid var(--line); }
+.cp-list-date { flex: none; width: 84px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cp-list-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.cp-list-main b { font-size: 13px; font-weight: 600; }
+.cp-list-main small { font-size: 12px; color: var(--muted); }
 @media (max-width: 860px) {
   .cp-legend { display: none; }
 }
