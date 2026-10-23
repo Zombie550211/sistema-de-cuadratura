@@ -336,19 +336,6 @@ export function Schedules({ area }: { area: Area }) {
   const popUsual = popWeekUsual ?? mostCommonShift(popHistory.data ?? []);
   let lastSection: string | null = null;
 
-  // Resumen del día elegido para los indicadores de arriba.
-  const onShift = visible.filter((e) => byKey.has(`${e.id}|${day}`));
-  const dayOffs = visible.map((e) => offByKey.get(`${e.id}|${day}`)).filter((d): d is ShiftDayOff => !!d);
-  const offCounts = dayOffs.reduce((m, d) => {
-    const label = dayOffLabel(d);
-    return m.set(label, (m.get(label) ?? 0) + 1);
-  }, new Map<string, number>());
-  const marks = onShift.map((e) => mark(e, byKey.get(`${e.id}|${day}`)));
-  const punched = onShift.filter((e) => firstPunch.has(e.id)).length;
-  const lateCount = marks.filter((m) => m.text.endsWith("· tarde")).length;
-  const missing = marks.filter((m) => m.text === "Sin marcación").length;
-  const weekTotal = visible.reduce((s, e) => s + weekHours(e), 0);
-  const overLimit = visible.filter((e) => weekHours(e) > WEEK_LIMIT_HOURS).length;
   const todayIndex = (new Date(`${today()}T00:00:00Z`).getUTCDay() + 6) % 7;
   const onToday = start === weekStart(today()) && dayIndex === todayIndex;
 
@@ -428,41 +415,6 @@ export function Schedules({ area }: { area: Area }) {
         </div>
       </section>
 
-      <dl className="home-kpis sch-kpis">
-        <div className="home-kpi">
-          <dt>En turno · {fmtShortDay(day)}</dt>
-          <dd className="home-kpi-value mono">{onShift.length}</dd>
-          <dd className="home-kpi-note">
-            de {visible.length} personas · {visible.length - onShift.length - dayOffs.length} sin turno
-          </dd>
-        </div>
-        <div className="home-kpi">
-          <dt>Marcaron</dt>
-          <dd className="home-kpi-value mono">{isFuture ? "—" : punched}</dd>
-          <dd className={`home-kpi-note${!isFuture && (lateCount || missing) ? " sch-note-warn" : ""}`}>
-            {isFuture ? "El día todavía no llega" : `${lateCount} tarde · ${missing} sin marcación`}
-          </dd>
-        </div>
-        <div className="home-kpi">
-          <dt>Libres y ausencias</dt>
-          <dd className="home-kpi-value mono">{dayOffs.length}</dd>
-          <dd className="home-kpi-note">
-            {dayOffs.length
-              ? [...offCounts]
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([label, n]) => `${n} ${label.toLowerCase()}`)
-                  .join(" · ")
-              : "Nadie libre ni ausente"}
-          </dd>
-        </div>
-        <div className="home-kpi">
-          <dt>Horas en la semana</dt>
-          <dd className="home-kpi-value mono">{fmtHours(weekTotal)}</dd>
-          <dd className={`home-kpi-note${overLimit ? " sch-note-warn" : ""}`}>
-            {overLimit ? `${overLimit} ${overLimit === 1 ? "persona pasa" : "personas pasan"} de ${WEEK_LIMIT_HOURS} h` : `Nadie pasa de ${WEEK_LIMIT_HOURS} h`}
-          </dd>
-        </div>
-      </dl>
 
       </div>
 
