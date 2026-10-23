@@ -992,7 +992,7 @@ function CompPanel({
       ) : available.length ? (
         <>
           <div className="picker-head">
-            <span className="caption">Asuetos trabajados desde el 15/09/2026 y aún sin usar</span>
+            <span className="caption">Asuetos trabajados y aún sin usar</span>
             <button
               type="button"
               className="btn ghost sm"
@@ -1303,7 +1303,7 @@ export function AssignModal({
         {mode === "compensatorio" && (
           <div className="modal-sec">
             <span className="modal-label">
-              Compensatorio disponible<small>asuetos trabajados desde el 15/09/2026 y aún sin usar</small>
+              Compensatorio disponible<small>asuetos trabajados y aún sin usar</small>
             </span>
             {comp.error && <div className="alert">{comp.error}</div>}
             <select
@@ -1326,7 +1326,7 @@ export function AssignModal({
               ))}
             </select>
             {comp.data && !holidayOptions.length && (
-              <span className="caption">Nadie de la lista tiene compensatorios disponibles: no hay asuetos trabajados con marcas desde el 15/09/2026.</span>
+              <span className="caption">Nadie de la lista tiene compensatorios disponibles: no hay asuetos trabajados sin usar.</span>
             )}
             {holiday && <span className="caption">La lista muestra solo a quienes trabajaron el {fmtDate(holiday.day)} y aún no lo han usado.</span>}
             {holiday && assignedDays > 1 && (

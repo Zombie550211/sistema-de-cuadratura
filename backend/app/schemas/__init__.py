@@ -359,6 +359,10 @@ class HolidayIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
+class HolidayWorkersIn(BaseModel):
+    employee_ids: list[int] = Field(max_length=5000)
+
+
 class HolidayOut(ORM):
     id: int
     day: date

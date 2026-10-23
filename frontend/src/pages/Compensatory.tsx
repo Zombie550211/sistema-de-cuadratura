@@ -48,6 +48,7 @@ export function Compensatory() {
   const [viewing, setViewing] = useState<Employee | null>(null);
   const [removing, setRemoving] = useState<{ employee: Employee; range: Range } | null>(null);
   const [editingHolidays, setEditingHolidays] = useState(false);
+  const [marking, setMarking] = useState<Holiday | null>(null);
   const strip = useRef<HTMLDivElement>(null);
 
   const employees = useAsync(async () => {
@@ -283,7 +284,9 @@ export function Compensatory() {
         <div className="emp-card-head">
           <div className="emp-card-title">
             <h2 className="pn-h2">Asuetos de {year}</h2>
-            <span className="caption">Quien marca en un asueto gana un compensatorio. Clic en un asueto para ver quién lo trabajó.</span>
+            <span className="caption">
+              Quien marca en un asueto gana un compensatorio. Clic en un asueto para ver quién lo trabajó; en los anteriores al 15/09/2026 (sin marcaciones) se anota a mano.
+            </span>
           </div>
           {picked && (
             <button className="btn ghost sm" onClick={() => setHolidayId(null)}>
@@ -303,15 +306,28 @@ export function Compensatory() {
                 type="button"
                 className={`cp-holiday${holidayId === h.id ? " on" : ""}${future ? " future" : ""}${before ? " before" : ""}`}
                 aria-pressed={holidayId === h.id}
-                disabled={!total}
-                onClick={() => setHolidayId(holidayId === h.id ? null : h.id)}
+                disabled={before ? !canEdit && !total : !total}
+                // Antes de las marcaciones: RRHH anota quién lo trabajó.
+                onClick={() => (before && canEdit ? setMarking(h) : setHolidayId(holidayId === h.id ? null : h.id))}
                 title={h.name}
               >
                 <span className="cp-holiday-date">
                   <b>{Number(h.day.slice(8))}</b> {short(h.day).split(" ")[1]}
                 </span>
                 <span className="cp-holiday-name">{h.name}</span>
-                {total ? (
+                {before ? (
+                  <span className="cp-holiday-meta">
+                    {st.earned ? (
+                      <>
+                        <b>{st.earned}</b> trabajaron · anotado por RRHH
+                      </>
+                    ) : canEdit ? (
+                      "Marcar quién lo trabajó"
+                    ) : (
+                      "Nadie anotado"
+                    )}
+                  </span>
+                ) : total ? (
                   <>
                     <span className="cp-holiday-bar" aria-hidden>
                       <i style={{ width: `${(st.earned / total) * 100}%` }} />
@@ -321,7 +337,7 @@ export function Compensatory() {
                     </span>
                   </>
                 ) : (
-                  <span className="cp-holiday-meta">{before ? "Antes del inicio (15/09/2026)" : future ? "Próximo" : "Sin marcas importadas"}</span>
+                  <span className="cp-holiday-meta">{future ? "Próximo" : "Sin marcas importadas"}</span>
                 )}
               </button>
             );
@@ -497,8 +513,112 @@ export function Compensatory() {
           }}
         />
       )}
+      {marking && (
+        <HolidayWorkersModal
+          holiday={marking}
+          employees={employees.data ?? []}
+          onClose={() => setMarking(null)}
+          onDone={() => {
+            setMarking(null);
+            comp.reload();
+          }}
+        />
+      )}
       {removing && <RemoveRange employee={removing.employee} range={removing.range} noun="día compensatorio" onClose={() => setRemoving(null)} onDone={done} />}
     </div>
+  );
+}
+
+/** Asueto anterior a las marcaciones: RRHH marca quiénes lo trabajaron y a ellos les cuenta
+ *  como compensatorio ganado. */
+function HolidayWorkersModal({ holiday, employees, onClose, onDone }: { holiday: Holiday; employees: Employee[]; onClose: () => void; onDone: () => void }) {
+  const current = useAsync(() => api.get<number[]>(`/schedules/holidays/${holiday.id}/workers`), [holiday.id]);
+  const [selected, setSelected] = useState<Set<number> | null>(null);
+  const [search, setSearch] = useState("");
+  const [area, setArea] = useState<Area | "todas">("todas");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const sel = selected ?? new Set(current.data ?? []);
+  // Solo quienes ya estaban en la empresa ese día (o sin fecha de ingreso).
+  const eligible = employees.filter((e) => !e.hire_date || e.hire_date <= holiday.day);
+  const q = search.trim().toLowerCase();
+  const shown = eligible.filter((e) => (area === "todas" || e.area === area) && (!q || e.full_name.toLowerCase().includes(q)));
+  const toggle = (id: number) => {
+    const n = new Set(sel);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    setSelected(n);
+  };
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put(`/schedules/holidays/${holiday.id}/workers`, { employee_ids: [...sel] });
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`¿Quién trabajó el ${fmtDate(holiday.day)}?`}
+      subtitle={`${holiday.name}. Es anterior a las marcaciones del sistema: a quienes marque aquí les cuenta como un compensatorio ganado.`}
+      onClose={onClose}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {(error || current.error) && <div className="alert">{error ?? current.error}</div>}
+        <div className="modal-sec">
+          <span className="modal-label">
+            Personas<small>{sel.size} {sel.size === 1 ? "marcada" : "marcadas"}</small>
+          </span>
+          <nav className="seg wrap" aria-label="Sección">
+            {[{ area: "todas" as const, label: "Todas" }, ...AREAS].map((a) => (
+              <button key={a.area} type="button" aria-pressed={area === a.area} className={area === a.area ? "on" : undefined} onClick={() => setArea(a.area)}>
+                {a.label}
+              </button>
+            ))}
+          </nav>
+          <div className="picker-head">
+            <label className="pn-search">
+              <span className="sr-only">Buscar</span>
+              <IconSearch width={16} height={16} aria-hidden />
+              <input className="input" placeholder="Buscar por nombre" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </label>
+            <button type="button" className="btn ghost sm" onClick={() => setSelected(new Set([...sel, ...shown.map((e) => e.id)]))}>
+              Todos
+            </button>
+            <button type="button" className="btn ghost sm" onClick={() => setSelected(new Set([...sel].filter((id) => !shown.some((e) => e.id === id))))} disabled={!sel.size}>
+              Ninguno
+            </button>
+          </div>
+          <div className="emp-picker">
+            {current.loading && !current.data ? (
+              <span className="caption" style={{ padding: 8 }}>Cargando…</span>
+            ) : (
+              shown.map((e) => (
+                <label key={e.id} className="check">
+                  <input type="checkbox" checked={sel.has(e.id)} onChange={() => toggle(e.id)} />
+                  {e.full_name} <span className="caption">{e.position && `· ${e.position}`}</span>
+                </label>
+              ))
+            )}
+            {current.data && shown.length === 0 && <span className="caption" style={{ padding: 8 }}>Nadie coincide con la búsqueda.</span>}
+          </div>
+        </div>
+      </div>
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose} disabled={busy}>
+          Cancelar
+        </button>
+        <button className="btn" onClick={save} disabled={busy || !current.data}>
+          {busy ? "Guardando…" : "Guardar"}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -554,7 +674,7 @@ function CompensatoryDetail({
   return (
     <Modal
       title={`Compensatorio de ${employee.full_name}`}
-      subtitle={`${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"} · saldo ${balance > 0 ? `+${balance}` : balance} · desde el 15/09/2026`}
+      subtitle={`${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"} · saldo ${balance > 0 ? `+${balance}` : balance}`}
       onClose={onClose}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>

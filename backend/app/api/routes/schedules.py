@@ -7,12 +7,13 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, Staff
 from app.core.config import get_settings
-from app.models import Employee, EmployeeStatus, Holiday, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
+from app.models import Employee, EmployeeStatus, Holiday, HolidayWorker, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
 from app.schemas import (
     BulkAssignIn,
     BulkAssignOut,
     CompensatoryStatusOut,
     HolidayIn,
+    HolidayWorkersIn,
     HolidayOut,
     ShiftAssignmentOut,
     LeaveBulkIn,
@@ -27,6 +28,7 @@ from app.schemas import (
     VacationStatusOut,
 )
 from app.services import audit, crm_push
+from app.services.compensatory import START as COMP_START
 from app.services.compensatory import compensatory_status, data_years, ensure_years
 from app.services.vacations import PeriodRecord, anniversary, completed_years, vacation_status
 
@@ -345,6 +347,32 @@ def create_holiday(data: HolidayIn, db: DB, user: HR):
     audit.record(db, user, "crear", "holiday", holiday.id, {"fecha": data.day.isoformat(), "nombre": holiday.name})
     db.commit()
     return holiday
+
+
+@router.get("/holidays/{holiday_id}/workers", response_model=list[int])
+def holiday_workers(holiday_id: int, db: DB, _: Staff):
+    """Quiénes anotó RRHH que trabajaron un asueto anterior a las marcaciones."""
+    return db.scalars(select(HolidayWorker.employee_id).where(HolidayWorker.holiday_id == holiday_id)).all()
+
+
+@router.put("/holidays/{holiday_id}/workers", response_model=list[int])
+def set_holiday_workers(holiday_id: int, data: HolidayWorkersIn, db: DB, user: HR):
+    """Anota quién trabajó el asueto: a esas personas les cuenta como compensatorio ganado."""
+    holiday = db.get(Holiday, holiday_id)
+    if holiday is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Asueto no encontrado")
+    if holiday.day >= COMP_START:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Este asueto se cuenta con las marcaciones del reloj, no a mano."
+        )
+    ids = set(data.employee_ids)
+    if missing := ids - set(db.scalars(select(Employee.id).where(Employee.id.in_(ids)))):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Empleados no encontrados: {sorted(missing)}")
+    db.execute(delete(HolidayWorker).where(HolidayWorker.holiday_id == holiday_id))
+    db.add_all(HolidayWorker(holiday_id=holiday_id, employee_id=i) for i in ids)
+    audit.record(db, user, "trabajaron_asueto", "holiday", holiday_id, {"fecha": holiday.day.isoformat(), "empleados": len(ids)})
+    db.commit()
+    return sorted(ids)
 
 
 @router.delete("/holidays/{holiday_id}", status_code=status.HTTP_204_NO_CONTENT)

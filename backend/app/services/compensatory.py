@@ -4,6 +4,9 @@ compensatorio; quien no marca, lo pierde.
 El cálculo sale de las marcaciones, así que al importar el archivo del reloj los compensatorios
 quedan ganados solos. Un asueto del que no se ha importado ninguna marca (de nadie) no cuenta
 como perdido: aún faltan los datos del reloj de ese día.
+
+Los asuetos del año anteriores a las marcaciones (antes del 15/09/2026) no tienen datos del reloj:
+RRHH anota a mano quién los trabajó (HolidayWorker) y solo a esas personas les cuentan como ganados.
 """
 
 from dataclasses import dataclass, field
@@ -13,11 +16,13 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Employee, Holiday, Punch, ShiftDayOff
+from app.models import Employee, Holiday, HolidayWorker, Punch, ShiftDayOff
 
-# Los compensatorios se llevan en el sistema desde el asueto del 15 de septiembre de 2026: los
-# asuetos y los días compensatorio anteriores no cuentan para el saldo.
+# Las marcaciones del sistema empiezan con el asueto del 15 de septiembre de 2026. Los asuetos
+# anteriores del mismo año cuentan solo para quien RRHH anote que los trabajó; los de años
+# anteriores y los días compensatorio previos a esa fecha no cuentan para el saldo.
 START = date(2026, 9, 15)
+FIRST_HOLIDAY = date(START.year, 1, 1)
 
 
 def easter(year: int) -> date:
@@ -99,10 +104,14 @@ def unused(earned: list[Holiday], notes: list[str | None]) -> list[Holiday]:
 
 def compensatory_status(db: Session, employees: list[Employee], today: date) -> list[CompensatoryStatus]:
     tz = get_settings().tz
-    holidays = db.scalars(select(Holiday).where(Holiday.day >= START, Holiday.day <= today).order_by(Holiday.day)).all()
+    every = db.scalars(select(Holiday).where(Holiday.day >= FIRST_HOLIDAY, Holiday.day <= today).order_by(Holiday.day)).all()
+    holidays = [h for h in every if h.day >= START]
     ids = [e.id for e in employees]
     marked: set[tuple[int, date]] = set()
     days_with_data: set[date] = set()
+    worked_before = set(
+        db.execute(select(HolidayWorker.employee_id, HolidayWorker.holiday_id).where(HolidayWorker.employee_id.in_(ids))).tuples()
+    ) if ids else set()
     if holidays and ids:
         def bounds(d: date):
             return and_(Punch.punched_at >= datetime.combine(d, time.min, tz), Punch.punched_at < datetime.combine(d + timedelta(days=1), time.min, tz))
@@ -130,7 +139,11 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
     out = []
     for e in employees:
         s = CompensatoryStatus(e.id, taken=len(notes.get(e.id, [])))
-        for h in holidays:
+        for h in every:
+            if h.day < START:
+                if (e.id, h.id) in worked_before:
+                    s.earned.append(h)
+                continue
             if e.hire_date and h.day < e.hire_date:
                 continue
             if (e.id, h.day) in marked:

@@ -97,6 +97,16 @@ class Holiday(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(120))
 
 
+class HolidayWorker(Base):
+    """Quién trabajó un asueto anterior a las marcaciones del sistema (antes del 15/09/2026):
+    RRHH lo anota a mano y ese asueto le cuenta como compensatorio ganado."""
+
+    __tablename__ = "holiday_workers"
+
+    holiday_id: Mapped[int] = mapped_column(ForeignKey("holidays.id", ondelete="CASCADE"), primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), primary_key=True, index=True)
+
+
 class VacationPeriod(TimestampMixin, Base):
     """Lo que RRHH anotó de un período de vacaciones (un año desde el aniversario de ingreso):
     días que el empleado trabajó en lugar de descansar, o el período ya cerrado como completo.
