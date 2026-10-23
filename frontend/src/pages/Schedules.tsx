@@ -98,6 +98,7 @@ export function Schedules({ area }: { area: Area }) {
   const [team, setTeam] = useState("all");
   const [pop, setPop] = useState<Pop | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [givingComp, setGivingComp] = useState(false);
   const [deleting, setDeleting] = useState<Employee | null>(null);
   const [assigning, setAssigning] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -201,6 +202,7 @@ export function Schedules({ area }: { area: Area }) {
   function openPop(ev: MouseEvent, e: Employee) {
     if (!canEdit) return;
     setRestoring(false);
+    setGivingComp(false);
     // Junto al clic, pero subiendo lo necesario para que la ventana (~720 px) quepa en pantalla.
     const top = Math.max(8, Math.min(ev.clientY + 12, window.innerHeight - 728));
     setError(null);
@@ -296,6 +298,21 @@ export function Schedules({ area }: { area: Area }) {
     const notes =
       opt.key === "no_show" ? NO_SHOW.label : pop.dayOff && (isNoShow(pop.dayOff) || isWillRestore(pop.dayOff)) ? "" : undefined;
     return popAction(() => api.post("/schedules/days-off", { employee_id: pop.employee.id, work_date: pop.day, kind: opt.kind, notes }));
+  }
+
+  /** Un día compensatorio por asueto elegido; la nota lleva la fecha del asueto y así queda usado. */
+  function giveCompensatory(picked: { day: string; holiday: Holiday | null }[]) {
+    if (!pop) return;
+    return popAction(async () => {
+      for (const p of picked) {
+        await api.post("/schedules/days-off", {
+          employee_id: pop.employee.id,
+          work_date: p.day,
+          kind: "compensatorio",
+          notes: p.holiday ? `Compensatorio ${fmtDate(p.holiday.day)} (${p.holiday.name})` : undefined,
+        });
+      }
+    });
   }
 
   function removeDayOff() {
@@ -673,7 +690,7 @@ export function Schedules({ area }: { area: Area }) {
             </div>
             {error && <div className="alert">{error}</div>}
 
-            {!restoring && (
+            {!restoring && !givingComp && (
             <div className="sch-pop-sec">
               <span className="sch-pop-label">Turno base</span>
               {activeTemplates.length ? (
@@ -701,7 +718,16 @@ export function Schedules({ area }: { area: Area }) {
             </div>
             )}
 
-            {restoring && !pop.current ? (
+            {givingComp ? (
+              <CompPanel
+                key={`${pop.employee.id}|${pop.day}`}
+                employee={pop.employee}
+                day={pop.day}
+                busy={busy}
+                onCancel={() => setGivingComp(false)}
+                onSave={giveCompensatory}
+              />
+            ) : restoring && !pop.current ? (
               <RestorePanel
                 key={`${pop.employee.id}|${pop.day}`}
                 usual={popUsual}
@@ -739,7 +765,7 @@ export function Schedules({ area }: { area: Area }) {
                       aria-pressed={on}
                       disabled={busy}
                       title={on ? `Quitar ${o.label.toLowerCase()}` : undefined}
-                      onClick={() => (on ? removeDayOff() : giveDayOff(o))}
+                      onClick={() => (on ? removeDayOff() : o.key === "compensatorio" ? setGivingComp(true) : giveDayOff(o))}
                     >
                       <i style={{ background: o.color }} />
                       {o.label}
@@ -907,6 +933,101 @@ function RestorePanel({
         </button>
         <button className="btn sm" disabled={busy || (choice === "nuevo" && start === end)}>
           {busy ? "Reponiendo…" : "Reponer horario"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Días que ocupan `n` compensatorios desde `day`: seguidos, sin contar domingos. */
+function compDays(day: string, n: number): string[] {
+  const out: string[] = [];
+  for (let d = day; out.length < n; d = addDays(d, 1)) {
+    if (new Date(`${d}T00:00:00Z`).getUTCDay() !== 0) out.push(d);
+  }
+  return out;
+}
+
+/** Compensatorio: lista de los asuetos ganados y sin usar de la persona; se pueden elegir varios
+ *  y cada uno es un día compensatorio, desde el día elegido en adelante. */
+function CompPanel({
+  employee,
+  day,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  employee: Employee;
+  day: string;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (picked: { day: string; holiday: Holiday | null }[]) => void;
+}) {
+  const comp = useAsync(() => api.get<CompensatoryStatus[]>("/schedules/compensatory"), []);
+  const available = comp.data?.find((c) => c.employee_id === employee.id)?.available ?? [];
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const chosen = available.filter((h) => picked.has(h.id));
+  const dates = compDays(day, Math.max(1, chosen.length));
+  const toggle = (id: number) =>
+    setPicked((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    onSave(chosen.length ? chosen.map((h, i) => ({ day: dates[i], holiday: h })) : [{ day, holiday: null }]);
+  }
+
+  return (
+    <form className="sch-pop-sec sch-restore" onSubmit={submit}>
+      <span className="sch-pop-label">
+        Compensatorios disponibles · {available.length || (comp.data ? "ninguno" : "…")}
+      </span>
+      {comp.error && <div className="alert">{comp.error}</div>}
+      {comp.loading && !comp.data ? (
+        <span className="caption">Cargando compensatorios…</span>
+      ) : available.length ? (
+        <>
+          <div className="picker-head">
+            <span className="caption">Asuetos trabajados desde el 15/09/2026 y aún sin usar</span>
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={() => setPicked(picked.size === available.length ? new Set() : new Set(available.map((h) => h.id)))}
+            >
+              {picked.size === available.length ? "Ninguno" : "Todos"}
+            </button>
+          </div>
+          <div className="sch-restore-list">
+            {available.map((h) => (
+              <label key={h.id} className={`sch-restore-opt${picked.has(h.id) ? " on" : ""}`}>
+                <input type="checkbox" checked={picked.has(h.id)} onChange={() => toggle(h.id)} />
+                <i style={{ background: DAY_OFF_COLOR.compensatorio }} />
+                <span>
+                  <b>{fmtDate(h.day)}</b>
+                  <small>{h.name}</small>
+                </span>
+              </label>
+            ))}
+          </div>
+          <span className="caption">
+            {chosen.length
+              ? `${chosen.length === 1 ? "Queda compensatorio el" : `Quedan ${chosen.length} días compensatorio:`} ${dates.map(fmtShortDay).join(", ")}${chosen.length > 1 ? " (seguidos, sin contar domingos)" : ""}.`
+              : "Elija uno o varios: cada asueto es un día compensatorio, desde este día en adelante."}
+          </span>
+        </>
+      ) : (
+        <span className="caption">No tiene asuetos trabajados sin usar. Puede marcar el día como compensatorio sin descontar uno en particular.</span>
+      )}
+      <div className="sch-restore-foot">
+        <button type="button" className="btn ghost sm" onClick={onCancel} disabled={busy}>
+          Cancelar
+        </button>
+        <button className="btn sm" disabled={busy || !comp.data || (available.length > 0 && !chosen.length)}>
+          {busy ? "Guardando…" : chosen.length > 1 ? `Dar ${chosen.length} compensatorios` : "Dar compensatorio"}
         </button>
       </div>
     </form>

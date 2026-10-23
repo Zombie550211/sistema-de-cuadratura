@@ -55,7 +55,7 @@ export function ImportPanel({ onChanged, onView }: { onChanged: (batch?: ImportB
   return (
     <div className="stack" style={{ gap: 16 }}>
       <p className="caption" style={{ marginTop: -12 }}>
-        Suba el archivo attlog (.dat) que descarga del reloj con la USB, o las marcaciones en Excel (.xlsx o .xls). El local se reconoce solo por las huellas.
+        Suba el archivo attlog (.dat) que descarga del reloj con la USB, o las marcaciones en Excel (.xlsx o .xls). El local se reconoce por el nombre del archivo (p. ej. «LA-18») o por las huellas.
       </p>
 
       <div
@@ -84,7 +84,7 @@ export function ImportPanel({ onChanged, onView }: { onChanged: (batch?: ImportB
       {needsLocal && (
         <div className="card row">
           <label className="field" style={{ flex: 1 }}>
-            <span>¿De qué local es este archivo? No se pudo reconocer por las huellas.</span>
+            <span>¿De qué local es este archivo? No se pudo reconocer por el nombre ni por las huellas.</span>
             <input className="input" list="locales-conocidos" value={local} onChange={(e) => setLocal(e.target.value)} placeholder="LA17" />
             <datalist id="locales-conocidos">
               {locales.data?.known.map((k) => <option key={k} value={k} />)}

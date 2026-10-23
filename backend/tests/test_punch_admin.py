@@ -81,6 +81,31 @@ def test_excel_detects_local_by_fingerprints_and_links_names(login):
     assert all(p["employee"] for p in punches)
 
 
+def test_excel_local_not_confused_when_ids_repeat_across_clocks(login):
+    client = login("rrhh")
+    # Los IDs 5 y 6 existen en LA18 y en LB8; LB8 además tiene más gente.
+    _employee(client, fingerprints={"LA18": "5"})
+    _employee(client, code="E-002", first_name="Luis", last_name="Pérez", fingerprints={"LA18": "6"})
+    _employee(client, code="E-003", first_name="Marta", last_name="Ruiz", fingerprints={"LB8": "5"})
+    _employee(client, code="E-004", first_name="Jorge", last_name="Díaz", fingerprints={"LB8": "6"})
+    _employee(client, code="E-005", first_name="Rosa", last_name="Gómez", fingerprints={"LB8": "7", "LA18": "8"})
+    rows = [["No.", "Nombre", "Fecha", "Hora"], [5, "Ana López", "25/09/2026", "07:01:00"], [6, "Luis Pérez", "25/09/2026", "07:15:00"]]
+
+    r = client.post("/api/attendance/imports", files={"file": ("ASISTENCIA OCT LA-18.xlsx", _xlsx(rows), "application/octet-stream")})
+    assert r.status_code == 201, r.text
+    assert r.json()["device"]["fingerprint_key"] == "LA18"
+
+    # Sin el local en el nombre, los nombres del Excel deciden.
+    rows[1][3] = "08:00:00"
+    r = client.post("/api/attendance/imports", files={"file": ("marcas.xlsx", _xlsx(rows), "application/octet-stream")})
+    assert r.status_code == 201, r.text
+    assert r.json()["device"]["fingerprint_key"] == "LA18"
+
+    # Sin nombres y con IDs que encajan igual en los dos locales, se pregunta.
+    r = client.post("/api/attendance/imports", files={"file": ("x.xlsx", _xlsx([["ID", "Fecha/Hora"], [5, "2026-09-26 08:00:00"], [6, "2026-09-26 08:01:00"]]), "application/octet-stream")})
+    assert r.status_code == 422 and "local" in r.json()["detail"]
+
+
 def test_excel_unknown_local_asks_which_one(login):
     client = login("rrhh")
     content = _xlsx([["ID", "Fecha/Hora"], [99, "2026-09-25 08:00:00"]])

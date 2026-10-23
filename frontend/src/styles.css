@@ -125,6 +125,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sb-link.active { background: var(--sb-active); opacity: 1; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05); }
 .sb-link.active > svg:first-child { color: var(--sb-orange); }
 .sb-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sb-foot { padding-top: 12px; border-top: 1px solid var(--sb-line); }
 .sb-caret { width: 14px !important; height: 14px !important; opacity: 0.7; transform: rotate(-90deg); transition: transform 0.2s; }
 .sb-caret.open { transform: rotate(180deg); }
 /* Sub-menú con líneas de árbol, como en el diseño. */
@@ -1314,4 +1315,17 @@ div.cut-item { padding: 0; cursor: default; }
   .cut-saved { border-right: 0; padding-right: 0; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
   .rc-months { flex-direction: column; }
   .pop { position: fixed; left: 12px !important; right: 12px; top: 80px; max-height: calc(100vh - 100px); overflow: auto; }
+}
+
+/* Listas largas (Horarios, Marcaciones, Empleados, Vacaciones, Compensatorios): la página ocupa la
+   pantalla y la lista llena lo que queda, con su propio scroll vertical y horizontal. */
+.pn-scroll, .emp-scroll, .sch-scroll, .table-wrap { overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+.pn-scroll::-webkit-scrollbar, .emp-scroll::-webkit-scrollbar, .sch-scroll::-webkit-scrollbar, .table-wrap::-webkit-scrollbar { display: block; width: 10px; height: 10px; }
+.pn-scroll::-webkit-scrollbar-thumb, .emp-scroll::-webkit-scrollbar-thumb, .sch-scroll::-webkit-scrollbar-thumb, .table-wrap::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 5px; border: 2px solid var(--surface); }
+.pn-scroll::-webkit-scrollbar-track, .emp-scroll::-webkit-scrollbar-track, .sch-scroll::-webkit-scrollbar-track, .table-wrap::-webkit-scrollbar-track { background: transparent; }
+@media (min-width: 861px) {
+  .page:has(> .card > :is(.pn-scroll, .emp-scroll, .sch-scroll)) { height: calc(100dvh - 64px); }
+  .page > .card:has(> :is(.pn-scroll, .emp-scroll, .sch-scroll)) { flex: 1 1 0; min-height: 360px; display: flex; flex-direction: column; overflow: hidden; }
+  .page > .card > :is(.pn-scroll, .emp-scroll, .sch-scroll) { flex: 1 1 0; min-height: 0; max-height: none; }
+  .page > .card > :not(.pn-scroll, .emp-scroll, .sch-scroll) { flex: none; }
 }

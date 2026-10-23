@@ -175,6 +175,12 @@ export function Layout() {
             })}
           </nav>
 
+          <div className="sb-foot">
+            <button type="button" className="sb-link" onClick={logout} title={collapsed ? "Cerrar sesión" : undefined} aria-label="Cerrar sesión">
+              <IconLogout />
+              <span className="sb-label">Cerrar sesión</span>
+            </button>
+          </div>
         </div>
       </aside>
       <main className="main">

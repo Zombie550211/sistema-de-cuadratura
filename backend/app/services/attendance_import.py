@@ -1,4 +1,5 @@
 import hashlib
+import re
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete, func, or_, select, update
@@ -14,6 +15,8 @@ from app.services.zk_attlog import flag_double_taps, parse_attlog, serial_from_f
 # Para reconocer el local de un archivo, al menos esta fracción de sus IDs debe coincidir con
 # las huellas de ese local en la planilla.
 LOCAL_MIN_MATCH = 0.6
+# …y sacarle esta ventaja al segundo local; si no, se pregunta a RRHH.
+LOCAL_MIN_MARGIN = 0.2
 
 
 class AttendanceImportError(Exception):
@@ -38,19 +41,53 @@ def known_locals(db: Session) -> list[str]:
     return sorted(keys)
 
 
-def detect_local(db: Session, badges: set[str]) -> str | None:
-    """El local cuyas huellas (planilla) coinciden con más IDs del archivo, si son mayoría clara."""
+def _local_code(key: str) -> tuple[str, str] | None:
+    """'LA24 comedor' -> ('LA', '24'): letras y número del local."""
+    match = re.match(r"\s*([A-Za-z]+)[\s._-]*(\d+)", key)
+    return (match.group(1).upper(), match.group(2).lstrip("0") or "0") if match else None
+
+
+def local_from_filename(db: Session, filename: str) -> str | None:
+    """El local escrito en el nombre del archivo ('… LA-18.xlsx', '… LB8 …'), si es uno solo."""
+    found = set()
+    for key in known_locals(db):
+        code = _local_code(key)
+        if code and re.search(
+            rf"(?<![A-Z0-9]){code[0]}[\s._-]*0*{code[1]}(?!\d)", filename.rsplit("/", 1)[-1].upper()
+        ):
+            found.add(key)
+    return found.pop() if len(found) == 1 else None
+
+
+def detect_local(db: Session, badges: set[str], names: dict[str, str] | None = None) -> str | None:
+    """El local cuyas huellas (planilla) coinciden con más IDs del archivo, si son mayoría clara.
+    Los IDs se repiten entre relojes (1, 2, 3…): si el archivo trae nombres, solo cuenta un ID
+    cuyo nombre coincide con el del empleado, y si otro local queda casi igual no se adivina."""
+    from app.services.employee_roster import name_key
+
     if not badges:
         return None
+    names = names or {}
     counts: dict[str, int] = {}
-    for fp in db.scalars(select(Employee.fingerprints)):
+    for first, last, fp in db.execute(select(Employee.first_name, Employee.last_name, Employee.fingerprints)):
         for key, value in (fp or {}).items():
-            if str(value).strip() in badges:
-                counts[key] = counts.get(key, 0) + 1
+            badge = str(value).strip()
+            if badge not in badges:
+                continue
+            if badge in names:
+                wanted, have = name_key(names[badge]), name_key(f"{first} {last}")
+                if len(wanted & have) < min(2, len(wanted)):
+                    continue
+            counts[key] = counts.get(key, 0) + 1
     if not counts:
         return None
+    ranked = sorted(counts.values(), reverse=True)
     best = max(counts, key=counts.get)
-    return best if counts[best] / len(badges) >= LOCAL_MIN_MATCH else None
+    if ranked[0] / len(badges) < LOCAL_MIN_MATCH:
+        return None
+    if len(ranked) > 1 and (ranked[0] - ranked[1]) / len(badges) < LOCAL_MIN_MARGIN:
+        return None
+    return best
 
 
 def link_unmapped_punches(db: Session) -> int:
@@ -177,8 +214,13 @@ def import_attlog(
     serial = (device_serial or serial_from_filename(filename) or "").strip().upper()
     device = db.scalar(select(Device).where(Device.serial_number == serial)) if serial else None
     if device is None and not serial:
-        # Sin número de serie (p. ej. un Excel): el reloj es el del local indicado o detectado.
-        local = local or detect_local(db, {r.badge for r in parsed.records})
+        # Sin número de serie (p. ej. un Excel): el reloj es el del local indicado, el escrito en
+        # el nombre del archivo o el detectado por las huellas.
+        local = (
+            local
+            or local_from_filename(db, filename)
+            or detect_local(db, {r.badge for r in parsed.records}, names)
+        )
         if not local:
             raise AttendanceImportError(
                 "No se pudo identificar el local de este archivo. Indique de qué local es."
@@ -189,7 +231,9 @@ def import_attlog(
     if local and device.fingerprint_key != local:
         device.fingerprint_key = local
     elif not device.fingerprint_key:
-        device.fingerprint_key = detect_local(db, {r.badge for r in parsed.records})
+        device.fingerprint_key = local_from_filename(db, filename) or detect_local(
+            db, {r.badge for r in parsed.records}, names
+        )
     if device.fingerprint_key and device.name.startswith("Reloj "):
         device.name = device.fingerprint_key
 
