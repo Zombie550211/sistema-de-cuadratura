@@ -27,7 +27,7 @@ from app.schemas import (
     VacationPeriodOut,
     VacationStatusOut,
 )
-from app.services import audit, crm_push
+from app.services import audit, compensatory, crm_push
 from app.services.compensatory import START as COMP_START
 from app.services.compensatory import compensatory_status, data_years, ensure_years
 from app.services.vacations import PeriodRecord, anniversary, completed_years, vacation_status
@@ -193,6 +193,9 @@ def _day_off(db: DB, employee_id: int, day: date, user, notes: str | None = None
         off = ShiftDayOff(employee_id=employee_id, work_date=day, kind=kind, notes=notes, created_by_id=user.id)
         db.add(off)
     else:
+        # Otro compensatorio el mismo día: se suma a los asuetos que ya usaba (un día puede usar dos).
+        if kind == off.kind == "compensatorio" and notes and compensatory.tags(off.notes):
+            notes = " · ".join([off.notes, *(n for n in notes.split(" · ") if n not in off.notes)])
         off.kind, off.source = kind, "rrhh"
         if notes is not None:
             off.notes = notes

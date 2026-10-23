@@ -9,6 +9,7 @@ Los asuetos del año anteriores a las marcaciones (antes del 15/09/2026) no tien
 RRHH anota a mano quién los trabajó (HolidayWorker) y solo a esas personas les cuentan como ganados.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
@@ -88,17 +89,37 @@ class CompensatoryStatus:
         return len(self.earned) - self.taken
 
 
+TAG = re.compile(r"Compensatorio (\d{2}/\d{2}/\d{4})")
+
+
+def tags(note: str | None) -> list[str]:
+    """Fechas de los asuetos que usa un día compensatorio ('Compensatorio dd/mm/aaaa (…)'); un
+    mismo día puede usar dos o más."""
+    return TAG.findall(note or "")
+
+
+def used(note: str | None) -> int:
+    """Asuetos que gasta un día compensatorio: los que nombra la nota, o uno si no dice cuál."""
+    return max(1, len(set(tags(note))))
+
+
 def unused(earned: list[Holiday], notes: list[str | None]) -> list[Holiday]:
-    """Asuetos ganados sin usar. Un día compensatorio usa el asueto cuya fecha (dd/mm/aaaa) trae
+    """Asuetos ganados sin usar. Un día compensatorio usa los asuetos cuya fecha (dd/mm/aaaa) trae
     en la nota; los que no dicen cuál usan el más antiguo que quede."""
     left = sorted(earned, key=lambda h: h.day)
     untagged = 0
     for note in notes:
-        match = next((h for h in left if h.day.strftime("%d/%m/%Y") in (note or "")), None)
-        if match is None:
+        dates = set(tags(note)) or {
+            h.day.strftime("%d/%m/%Y") for h in left if h.day.strftime("%d/%m/%Y") in (note or "")
+        }
+        if not dates:
             untagged += 1
-        else:
-            left.remove(match)
+        for d in sorted(dates):
+            match = next((h for h in left if h.day.strftime("%d/%m/%Y") == d), None)
+            if match is None:
+                untagged += 1
+            else:
+                left.remove(match)
     return left[untagged:]
 
 
@@ -138,7 +159,7 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
 
     out = []
     for e in employees:
-        s = CompensatoryStatus(e.id, taken=len(notes.get(e.id, [])))
+        s = CompensatoryStatus(e.id, taken=sum(used(n) for n in notes.get(e.id, [])))
         for h in every:
             if h.day < START:
                 if (e.id, h.id) in worked_before:

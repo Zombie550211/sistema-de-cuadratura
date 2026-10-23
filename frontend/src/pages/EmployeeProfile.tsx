@@ -350,7 +350,8 @@ export function CompensatoryModal({
 }) {
   const status = useAsync(() => api.get<CompensatoryStatus[]>("/schedules/compensatory", { area: employee.area }), [employee.area]);
   const available = status.data?.find((s) => s.employee_id === employee.id)?.available ?? [];
-  const [holidayId, setHolidayId] = useState("");
+  // Asuetos que se compensan; si son dos o más, van todos el mismo día.
+  const [picked, setPicked] = useState<Set<number>>(new Set());
   const [month, setMonth] = useState(initialMonth);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -358,17 +359,24 @@ export function CompensatoryModal({
   const first = `${month}-01`;
   const last = addDays(`${shiftMonth(month, 1)}-01`, -1);
   const monthDays = useAsync(
-    () => (holidayId ? api.get<EmployeeSchedule>(`/employees/${employee.id}/schedule`, { date_from: first, date_to: last }) : Promise.resolve(null)),
-    [holidayId, employee.id, first, last],
+    () => (picked.size ? api.get<EmployeeSchedule>(`/employees/${employee.id}/schedule`, { date_from: first, date_to: last }) : Promise.resolve(null)),
+    [picked.size > 0, employee.id, first, last],
   );
   const offOf = new Map((monthDays.data?.days ?? []).filter((d) => d.day_off && d.day_off.kind !== "libre").map((d) => [d.date, d.day_off!]));
-  const holiday = available.find((h) => String(h.id) === holidayId);
+  const chosen = available.filter((h) => picked.has(h.id));
+  const toggle = (id: number) =>
+    setPicked((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
   // Lunes primero: cuántas casillas vacías van antes del día 1.
   const lead = (new Date(`${first}T00:00:00Z`).getUTCDay() + 6) % 7;
   const count = Number(last.slice(8));
 
   async function pick(day: string) {
-    if (!holiday) return;
+    if (!chosen.length) return;
     setBusy(true);
     setError(null);
     try {
@@ -376,7 +384,7 @@ export function CompensatoryModal({
         employee_id: employee.id,
         work_date: day,
         kind: "compensatorio",
-        notes: `Compensatorio ${fmtDate(holiday.day)} (${holiday.name})`,
+        notes: chosen.map((h) => `Compensatorio ${fmtDate(h.day)} (${h.name})`).join(" · "),
       });
       onDone(day);
     } catch (err) {
@@ -392,22 +400,26 @@ export function CompensatoryModal({
         {status.data && !available.length ? (
           <div className="alert info">No tiene compensatorios disponibles: no ha marcado en ningún asueto o ya los usó todos.</div>
         ) : (
-          <label className="field">
-            <span>Compensatorio disponible</span>
-            <select className="input" value={holidayId} onChange={(ev) => setHolidayId(ev.target.value)} disabled={!status.data}>
-              <option value="">{status.data ? "Elija el asueto que se compensa…" : "Cargando…"}</option>
+          <div className="modal-sec">
+            <span className="modal-label">
+              Compensatorios disponibles<small>{status.data ? `${chosen.length} de ${available.length} elegidos · dos o más van el mismo día` : "Cargando…"}</small>
+            </span>
+            <div className="emp-picker">
               {available.map((h) => (
-                <option key={h.id} value={h.id}>
-                  {fmtDate(h.day)} · {h.name}
-                </option>
+                <label key={h.id} className="check">
+                  <input type="checkbox" checked={picked.has(h.id)} onChange={() => toggle(h.id)} />
+                  {fmtDate(h.day)} <span className="caption">· {h.name}</span>
+                </label>
               ))}
-            </select>
-          </label>
+            </div>
+          </div>
         )}
 
-        {holiday && (
+        {chosen.length > 0 && (
           <div className="month-cal">
-            <span className="caption">Elija el día del mes en que lo descansa. Si ese día tenía turno, se quita (también en el CRM).</span>
+            <span className="caption">
+              Elija el día en que descansa {chosen.length > 1 ? `los ${chosen.length} compensatorios` : "el compensatorio"}. Si ese día tenía turno, se quita (también en el CRM).
+            </span>
             <div className="month-cal-head">
               <button className="icon-btn" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Mes anterior">
                 <IconChevronLeft width={20} height={20} />
@@ -434,7 +446,7 @@ export function CompensatoryModal({
                     key={day}
                     className={`month-cal-day${day === today() ? " today" : ""}${off ? " taken" : ""}`}
                     disabled={busy || !!off || monthDays.loading}
-                    title={off ? `${DAY_OFF_LABEL[off.kind]}${off.notes ? ` · ${off.notes}` : ""}` : `Dar el compensatorio el ${fmtDate(day)}`}
+                    title={off ? `${DAY_OFF_LABEL[off.kind]}${off.notes ? ` · ${off.notes}` : ""}` : `Dar ${chosen.length > 1 ? `${chosen.length} compensatorios` : "el compensatorio"} el ${fmtDate(day)}`}
                     onClick={() => pick(day)}
                   >
                     {i + 1}

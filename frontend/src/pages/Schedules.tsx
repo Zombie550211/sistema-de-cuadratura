@@ -300,16 +300,19 @@ export function Schedules({ area }: { area: Area }) {
     return popAction(() => api.post("/schedules/days-off", { employee_id: pop.employee.id, work_date: pop.day, kind: opt.kind, notes }));
   }
 
-  /** Un día compensatorio por asueto elegido; la nota lleva la fecha del asueto y así queda usado. */
+  /** Compensatorios elegidos, cada uno en su día; la nota lleva la fecha del asueto y así queda usado. */
   function giveCompensatory(picked: { day: string; holiday: Holiday | null }[]) {
     if (!pop) return;
+    // Un registro por día; si un día lleva dos o más asuetos, la nota los nombra todos.
+    const byDay = new Map<string, Holiday[]>();
+    for (const p of picked) byDay.set(p.day, [...(byDay.get(p.day) ?? []), ...(p.holiday ? [p.holiday] : [])]);
     return popAction(async () => {
-      for (const p of picked) {
+      for (const [day, holidays] of byDay) {
         await api.post("/schedules/days-off", {
           employee_id: pop.employee.id,
-          work_date: p.day,
+          work_date: day,
           kind: "compensatorio",
-          notes: p.holiday ? `Compensatorio ${fmtDate(p.holiday.day)} (${p.holiday.name})` : undefined,
+          notes: holidays.length ? holidays.map((h) => `Compensatorio ${fmtDate(h.day)} (${h.name})`).join(" · ") : undefined,
         });
       }
     });
@@ -891,17 +894,9 @@ function RestorePanel({
   );
 }
 
-/** Días que ocupan `n` compensatorios desde `day`: seguidos, sin contar domingos. */
-function compDays(day: string, n: number): string[] {
-  const out: string[] = [];
-  for (let d = day; out.length < n; d = addDays(d, 1)) {
-    if (new Date(`${d}T00:00:00Z`).getUTCDay() !== 0) out.push(d);
-  }
-  return out;
-}
-
-/** Compensatorio: lista de los asuetos ganados y sin usar de la persona; se pueden elegir varios
- *  y cada uno es un día compensatorio, desde el día elegido en adelante. */
+/** Compensatorio: lista de los asuetos ganados y sin usar de la persona; se eligen uno o varios
+ *  y cada uno lleva el día en que se descansa (por defecto el día elegido). Un mismo día puede
+ *  usar dos o más. */
 function CompPanel({
   employee,
   day,
@@ -917,20 +912,25 @@ function CompPanel({
 }) {
   const comp = useAsync(() => api.get<CompensatoryStatus[]>("/schedules/compensatory"), []);
   const available = comp.data?.find((c) => c.employee_id === employee.id)?.available ?? [];
-  const [picked, setPicked] = useState<Set<number>>(new Set());
+  // Asueto elegido → día en que se descansa.
+  const [picked, setPicked] = useState<Map<number, string>>(new Map());
   const chosen = available.filter((h) => picked.has(h.id));
-  const dates = compDays(day, Math.max(1, chosen.length));
   const toggle = (id: number) =>
     setPicked((s) => {
-      const n = new Set(s);
+      const n = new Map(s);
       if (n.has(id)) n.delete(id);
-      else n.add(id);
+      else n.set(id, day);
       return n;
     });
+  const setDay = (id: number, d: string) => setPicked((s) => new Map(s).set(id, d));
+  // Resumen por día: cuántos compensatorios usa cada uno.
+  const perDay = [...chosen.reduce((m, h) => m.set(picked.get(h.id)!, (m.get(picked.get(h.id)!) ?? 0) + 1), new Map<string, number>())].sort(
+    (a, b) => a[0].localeCompare(b[0]),
+  );
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    onSave(chosen.length ? chosen.map((h, i) => ({ day: dates[i], holiday: h })) : [{ day, holiday: null }]);
+    onSave(chosen.length ? chosen.map((h) => ({ day: picked.get(h.id)!, holiday: h })) : [{ day, holiday: null }]);
   }
 
   return (
@@ -944,31 +944,43 @@ function CompPanel({
       ) : available.length ? (
         <>
           <div className="picker-head">
-            <span className="caption">Asuetos trabajados y aún sin usar</span>
+            <span className="caption">Asuetos trabajados y aún sin usar. Elija uno o varios y el día de cada uno.</span>
             <button
               type="button"
               className="btn ghost sm"
-              onClick={() => setPicked(picked.size === available.length ? new Set() : new Set(available.map((h) => h.id)))}
+              onClick={() => setPicked(picked.size === available.length ? new Map() : new Map(available.map((h) => [h.id, picked.get(h.id) ?? day])))}
             >
               {picked.size === available.length ? "Ninguno" : "Todos"}
             </button>
           </div>
           <div className="sch-restore-list">
             {available.map((h) => (
-              <label key={h.id} className={`sch-restore-opt${picked.has(h.id) ? " on" : ""}`}>
-                <input type="checkbox" checked={picked.has(h.id)} onChange={() => toggle(h.id)} />
-                <i style={{ background: DAY_OFF_COLOR.compensatorio }} />
-                <span>
-                  <b>{fmtDate(h.day)}</b>
-                  <small>{h.name}</small>
-                </span>
-              </label>
+              <div key={h.id} className={`sch-restore-opt sch-comp-opt${picked.has(h.id) ? " on" : ""}`}>
+                <label>
+                  <input type="checkbox" checked={picked.has(h.id)} onChange={() => toggle(h.id)} />
+                  <i style={{ background: DAY_OFF_COLOR.compensatorio }} />
+                  <span>
+                    <b>{fmtDate(h.day)}</b>
+                    <small>{h.name}</small>
+                  </span>
+                </label>
+                {picked.has(h.id) && (
+                  <input
+                    className="input"
+                    type="date"
+                    required
+                    value={picked.get(h.id)}
+                    onChange={(e) => setDay(h.id, e.target.value)}
+                    aria-label={`Día en que descansa el compensatorio del ${fmtDate(h.day)}`}
+                  />
+                )}
+              </div>
             ))}
           </div>
           <span className="caption">
-            {chosen.length
-              ? `${chosen.length === 1 ? "Queda compensatorio el" : `Quedan ${chosen.length} días compensatorio:`} ${dates.map(fmtShortDay).join(", ")}${chosen.length > 1 ? " (seguidos, sin contar domingos)" : ""}.`
-              : "Elija uno o varios: cada asueto es un día compensatorio, desde este día en adelante."}
+            {perDay.length
+              ? perDay.map(([d, n]) => `${fmtShortDay(d)}: ${n} compensatorio${n === 1 ? "" : "s"}`).join(" · ")
+              : "Cada asueto elegido es un compensatorio; dos o más pueden ir el mismo día."}
           </span>
         </>
       ) : (

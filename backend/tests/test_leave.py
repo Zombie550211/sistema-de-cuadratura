@@ -140,6 +140,24 @@ def test_holiday_before_punches_counts_only_for_who_hr_marked(login):
     assert status[other["id"]]["earned"] == [] and status[other["id"]]["lost"] == []
 
 
+def test_one_day_can_use_two_compensatories(login):
+    hr = login("rrhh")
+    emp = _employee(hr, code="E-014", first_name="Ana", hire_date="2020-01-01")
+    holidays = {h["day"]: h for h in hr.get("/api/schedules/holidays", params={"year": 2026}).json()}
+    for day in ("2026-01-01", "2026-05-01", "2026-06-17"):
+        hr.put(f"/api/schedules/holidays/{holidays[day]['id']}/workers", json={"employee_ids": [emp["id"]]})
+
+    # Uno por uno, el mismo día: el segundo se suma al primero.
+    for note in ("Compensatorio 01/01/2026 (Año Nuevo)", "Compensatorio 17/06/2026 (Día del Padre)"):
+        r = hr.post("/api/schedules/days-off", json={"employee_id": emp["id"], "work_date": "2026-10-30", "kind": "compensatorio", "notes": note})
+        assert r.status_code == 201, r.text
+    assert r.json()["notes"] == "Compensatorio 01/01/2026 (Año Nuevo) · Compensatorio 17/06/2026 (Día del Padre)"
+
+    status = next(s for s in hr.get("/api/schedules/compensatory").json() if s["employee_id"] == emp["id"])
+    assert (status["taken"], status["balance"]) == (2, 1)
+    assert [h["day"] for h in status["available"]] == ["2026-05-01"]
+
+
 def test_compensatory_note_uses_that_holiday(db):
     from datetime import date
 

@@ -622,21 +622,29 @@ function HolidayWorkersModal({ holiday, employees, onClose, onDone }: { holiday:
   );
 }
 
-/** Cada día compensatorio tomado con el asueto que compensa: el que trae en la nota (dd/mm/aaaa)
- *  o, si la nota no dice, el asueto ganado más antiguo que quede (igual que el saldo del servidor). */
+/** Cada día compensatorio tomado con los asuetos que compensa: los que trae en la nota
+ *  ('Compensatorio dd/mm/aaaa', uno o varios) o, si la nota no dice, el asueto ganado más antiguo
+ *  que quede (igual que el saldo del servidor). Un asueto sin respaldo sale como null. */
 function takenWithHoliday(earned: Holiday[], taken: ShiftDayOff[]): { day: ShiftDayOff; holiday: Holiday | null }[] {
   const left = [...earned].sort((a, b) => a.day.localeCompare(b.day));
   const sorted = [...taken].sort((a, b) => a.work_date.localeCompare(b.work_date));
-  const out = new Map<number, Holiday | null>();
+  const out = new Map<number, (Holiday | null)[]>();
+  const pending: number[] = [];
   for (const d of sorted) {
-    const h = left.find((x) => (d.notes ?? "").includes(fmtDate(x.day)));
-    if (h) {
-      out.set(d.id, h);
-      left.splice(left.indexOf(h), 1);
+    const dates = [...new Set([...(d.notes ?? "").matchAll(/Compensatorio (\d{2}\/\d{2}\/\d{4})/g)].map((m) => m[1]))];
+    if (!dates.length) {
+      const h = left.find((x) => (d.notes ?? "").includes(fmtDate(x.day)));
+      if (h) dates.push(fmtDate(h.day));
+    }
+    if (!dates.length) pending.push(d.id);
+    for (const date of dates) {
+      const h = left.find((x) => fmtDate(x.day) === date);
+      if (h) left.splice(left.indexOf(h), 1);
+      out.set(d.id, [...(out.get(d.id) ?? []), h ?? null]);
     }
   }
-  for (const d of sorted) if (!out.has(d.id)) out.set(d.id, left.shift() ?? null);
-  return sorted.map((d) => ({ day: d, holiday: out.get(d.id) ?? null }));
+  for (const id of pending) out.set(id, [left.shift() ?? null]);
+  return sorted.flatMap((d) => (out.get(d.id) ?? [null]).map((holiday) => ({ day: d, holiday })));
 }
 
 const longDay = new Intl.DateTimeFormat("es-SV", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -709,8 +717,8 @@ function CompensatoryDetail({
             <span className="caption">Cargando…</span>
           ) : rows.length ? (
             <ul className="cp-list">
-              {rows.map(({ day, holiday }) => (
-                <li key={day.id}>
+              {rows.map(({ day, holiday }, i) => (
+                <li key={`${day.id}-${i}`}>
                   <span className="cp-list-date">{fmtDate(day.work_date)}</span>
                   <span className="cp-list-main">
                     <b>{holiday ? `Compensa el ${fmtDate(holiday.day)} · ${holiday.name}` : "Sin asueto que lo respalde"}</b>
