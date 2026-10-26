@@ -111,13 +111,10 @@ export function Compensatory() {
   const withBalance = all.filter((e) => (compOf.get(e.id)?.balance ?? 0) > 0);
   const balanceDays = withBalance.reduce((s, e) => s + compOf.get(e.id)!.balance, 0);
   const negative = all.filter((e) => (compOf.get(e.id)?.balance ?? 0) < 0).length;
-  // Los totales de arriba solo cuentan del 15/09/2026 en adelante; los asuetos y días
-  // anteriores siguen viéndose por persona, pero fuera de estas estadísticas.
-  const countedHolidays = yearHolidays.filter((h) => h.day >= START);
-  const earnedYear = countedHolidays.reduce((s, h) => s + (holidayStats.get(h.id)?.earned ?? 0), 0);
-  const lostYear = countedHolidays.reduce((s, h) => s + (holidayStats.get(h.id)?.lost ?? 0), 0);
+  const earnedYear = [...holidayStats.values()].reduce((s, x) => s + x.earned, 0);
+  const lostYear = [...holidayStats.values()].reduce((s, x) => s + x.lost, 0);
   const ids = new Set(all.map((e) => e.id));
-  const takenYear = (days.data ?? []).filter((d) => ids.has(d.employee_id) && d.work_date >= START).length;
+  const takenYear = (days.data ?? []).filter((d) => ids.has(d.employee_id)).length;
   const offToday = (days.data ?? []).filter((d) => ids.has(d.employee_id) && d.work_date === now).length;
   const nextHoliday = yearHolidays.find((h) => h.day >= now);
 
@@ -417,7 +414,7 @@ export function Compensatory() {
                       return (
                         <td key={h.id} className={`cp-hcol${holidayId === h.id ? " on" : ""}`}>
                           <i
-                            className={`cp-cell${st ? ` ${st}` : ""}`}
+                            className={`cp-cell${st ? ` ${st}` : ""}${h.day < START ? " before" : ""}`}
                             title={`${h.name}: ${st === "earned" ? "marcó, ganó un compensatorio" : st === "lost" ? "no marcó, lo perdió" : "sin dato"}`}
                           >
                             {st === "earned" && <IconCheck width={10} height={10} />}
@@ -706,7 +703,7 @@ function CompensatoryDetail({
           {pending.length ? (
             <ul className="cp-list">
               {pending.map((h) => (
-                <li key={h.id}>
+                <li key={h.id} className={h.day < START ? "cp-before" : undefined} title={h.day < START ? "Anterior al 15/09/2026" : undefined}>
                   <span className="cp-list-date">{fmtDate(h.day)}</span>
                   <span className="cp-list-main">
                     <b>{h.name}</b>

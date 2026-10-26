@@ -5,9 +5,9 @@ El cálculo sale de las marcaciones, así que al importar el archivo del reloj l
 quedan ganados solos. Un asueto del que no se ha importado ninguna marca (de nadie) no cuenta
 como perdido: aún faltan los datos del reloj de ese día.
 
-Los asuetos anteriores al 15/09/2026 NO cuentan para el saldo (no había marcaciones). RRHH anota
-a mano quién los trabajó (HolidayWorker) y esos asuetos siguen MOSTRÁNDOSE en la lista de cada
-persona, pero no suman al saldo ni se pueden gastar: solo cuentan los del 15/09 en adelante.
+Los asuetos anteriores al 15/09/2026 no tienen marcaciones del reloj: RRHH anota a mano quién los
+trabajó (HolidayWorker). Esos compensatorios SÍ cuentan y quedan disponibles para gastarse igual
+que los demás; en la página de Compensatorios salen en gris para distinguir que son previos al corte.
 """
 
 import re
@@ -87,9 +87,9 @@ class CompensatoryStatus:
 
     @property
     def balance(self) -> int:
-        # Solo cuentan los asuetos del 15/09/2026 en adelante; los anteriores se muestran
-        # (en `earned`) pero no suman al saldo.
-        return sum(1 for h in self.earned if h.day >= START) - self.taken
+        # Todos los asuetos trabajados cuentan y están disponibles, también los anteriores al
+        # 15/09/2026 (en la UI esos salen en gris). Saldo = ganados menos tomados.
+        return len(self.earned) - self.taken
 
 
 TAG = re.compile(r"Compensatorio (\d{2}/\d{2}/\d{4})")
@@ -176,7 +176,7 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
                 s.earned.append(h)
             elif h.day in days_with_data:
                 s.lost.append(h)
-        # Solo se pueden gastar los del 15/09 en adelante.
-        s.available = unused([h for h in s.earned if h.day >= START], notes.get(e.id, []))
+        # Disponibles = ganados sin usar, incluidos los anteriores al 15/09 (salen en gris en la UI).
+        s.available = unused(s.earned, notes.get(e.id, []))
         out.append(s)
     return out

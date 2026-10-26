@@ -852,6 +852,8 @@ button.lv-status:hover { filter: brightness(0.97); box-shadow: 0 0 0 1px current
 .cp-table thead .cp-hcol.on { background: #e2e8f0; color: var(--text); }
 .cp-cell { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; border: 1px dashed var(--line-strong); color: #fff; vertical-align: middle; }
 .cp-cell.earned { background: #15803d; border: 1px solid #15803d; }
+.cp-cell.before { opacity: 0.45; }
+.cp-before { opacity: 0.55; }
 .cp-cell.lost { background: #fee2e2; border: 1px solid #fca5a5; }
 .cp-balance { display: flex; align-items: center; gap: 8px; padding: 4px 6px; margin: -4px -6px; border: 0; border-radius: var(--r-sm); background: none; color: inherit; font: inherit; cursor: pointer; }
 .cp-balance:hover { background: var(--surface-2); }

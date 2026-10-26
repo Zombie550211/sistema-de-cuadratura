@@ -121,13 +121,13 @@ def test_holiday_with_punch_earns_compensatory_and_without_is_lost(client, login
     assert status[absent["id"]]["earned"] == [] and [h["day"] for h in status[absent["id"]]["lost"]] == ["2026-09-15"]
 
 
-def test_holiday_before_cutoff_is_recorded_but_not_counted(login):
+def test_holiday_before_cutoff_counts_and_is_available(login):
     hr = login("rrhh")
     worked = _employee(hr, code="E-012", first_name="Ana", hire_date="2020-01-01")
     other = _employee(hr, code="E-013", first_name="Luis", hire_date="2020-01-01")
     holidays = {h["day"]: h for h in hr.get("/api/schedules/holidays", params={"year": 2026}).json()}
 
-    # RRHH puede anotar quién trabajó un asueto anterior al 15/09 (queda visible)…
+    # RRHH anota quién trabajó un asueto anterior al 15/09…
     may = holidays["2026-05-01"]["id"]
     r = hr.put(f"/api/schedules/holidays/{may}/workers", json={"employee_ids": [worked["id"]]})
     assert r.status_code == 200 and r.json() == [worked["id"]]
@@ -135,10 +135,10 @@ def test_holiday_before_cutoff_is_recorded_but_not_counted(login):
     # Los del 15/09 en adelante salen de las marcaciones, no se anotan a mano.
     assert hr.put(f"/api/schedules/holidays/{holidays['2026-09-15']['id']}/workers", json={"employee_ids": []}).status_code == 422
 
-    # …el asueto previo al 15/09 se MUESTRA (earned) pero NO cuenta para el saldo ni se puede gastar.
+    # …y ese compensatorio previo al 15/09 cuenta y queda DISPONIBLE para gastarse.
     status = {s["employee_id"]: s for s in hr.get("/api/schedules/compensatory").json()}
-    assert [h["day"] for h in status[worked["id"]]["earned"]] == ["2026-05-01"]
-    assert status[worked["id"]]["available"] == [] and status[worked["id"]]["balance"] == 0
+    assert [h["day"] for h in status[worked["id"]]["available"]] == ["2026-05-01"]
+    assert status[worked["id"]]["balance"] == 1
     assert status[other["id"]]["earned"] == [] and status[other["id"]]["lost"] == []
 
 

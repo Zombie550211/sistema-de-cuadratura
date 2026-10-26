@@ -353,6 +353,7 @@ export function CompensatoryModal({
   // Asuetos que se compensan; si son dos o más, van todos el mismo día.
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [month, setMonth] = useState(initialMonth);
+  const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -384,7 +385,7 @@ export function CompensatoryModal({
         employee_id: employee.id,
         work_date: day,
         kind: "compensatorio",
-        notes: chosen.map((h) => `Compensatorio ${fmtDate(h.day)} (${h.name})`).join(" · "),
+        notes: [chosen.map((h) => `Compensatorio ${fmtDate(h.day)} (${h.name})`).join(" · "), comment.trim()].filter(Boolean).join(" · "),
       });
       onDone(day);
     } catch (err) {
@@ -413,6 +414,15 @@ export function CompensatoryModal({
               ))}
             </div>
           </div>
+        )}
+
+        {chosen.length > 0 && (
+          <label className="modal-sec">
+            <span className="modal-label">
+              Comentario<small>opcional · queda en la nota del día</small>
+            </span>
+            <input className="input" maxLength={300} placeholder="Ej. trabajó el feriado por cobertura" value={comment} onChange={(e) => setComment(e.target.value)} />
+          </label>
         )}
 
         {chosen.length > 0 && (
