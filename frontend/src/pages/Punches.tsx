@@ -673,12 +673,14 @@ function PersonQuincena({
       api.get<Page<Punch>>("/attendance/punches", {
         date_from: from,
         date_to: to,
-        device_id: deviceId,
-        ...(person.employeeId ? { employee_id: person.employeeId } : { badge: person.badge }),
+        // Con empleado, se traen sus marcas de TODOS los relojes (marca con huellas distintas en
+        // cada uno): si no, los días que marcó en otro reloj saldrían como falta. Una huella sin
+        // empleado sí se limita a su reloj, porque el mismo número existe en varios.
+        ...(person.employeeId ? { employee_id: person.employeeId } : { device_id: deviceId, badge: person.badge }),
         include_double_taps: showDoubles,
         limit: 10000,
       }),
-    [person.key, deviceId, showDoubles, from, to],
+    [person.key, deviceId, showDoubles, from, to, person.employeeId],
   );
   const late = useAsync(
     () =>
