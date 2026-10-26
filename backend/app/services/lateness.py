@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Employee, Punch, ShiftAssignment, ShiftDayOff
+from app.models import Employee, LatenessWaiver, Punch, ShiftAssignment, ShiftDayOff
 
 
 @dataclass
@@ -86,6 +86,14 @@ def lateness(
     off_kind = {(emp_id, day): kind for emp_id, day, kind in db.execute(off_stmt)}
     shifts = {(s.employee_id, s.work_date): s for s in db.scalars(shift_stmt) if (s.employee_id, s.work_date) not in off_kind}
 
+    # Quincenas en las que RRHH decidió NO aplicar las llegadas tarde del empleado.
+    waiver_stmt = select(LatenessWaiver.employee_id, LatenessWaiver.quincena_start)
+    if area:
+        waiver_stmt = waiver_stmt.join(Employee, LatenessWaiver.employee_id == Employee.id).where(Employee.area == area)
+    if employee_id:
+        waiver_stmt = waiver_stmt.where(LatenessWaiver.employee_id == employee_id)
+    waived: set[tuple[int, date]] = set(db.execute(waiver_stmt).tuples())
+
     # (empleado, día trabajado, inicio y fin del turno, fecha del turno si fue intercambio)
     days: list[tuple[int, date, datetime, datetime, date | None]] = []
     for (emp_id, day), shift in shifts.items():
@@ -104,6 +112,9 @@ def lateness(
             continue
         check_in = first_punch.get((emp_id, day))
         late_seconds = max(int((check_in - begin).total_seconds()), 0) if check_in else 0
+        # Si RRHH marcó «no aplicar» esta quincena, la tardanza del día no cuenta (ni suma al acumulado).
+        if (emp_id, quincena_start(day)) in waived:
+            late_seconds = 0
         late = late_seconds // 60
         bucket = (emp_id, quincena_start(day))
         before = used.get(bucket, 0)

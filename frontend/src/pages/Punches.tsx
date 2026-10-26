@@ -665,6 +665,20 @@ function PersonQuincena({
         : Promise.resolve([]),
     [person.employeeId, from, to],
   );
+  // Quincena marcada como «no aplicar llegadas tarde» (decisión de RRHH) para esta persona.
+  const waiver = useAsync(
+    () =>
+      person.employeeId
+        ? api.get<{ employee_id: number; quincena_start: string; applied: boolean }[]>("/attendance/lateness-waivers", {
+            date_from: from,
+            date_to: to,
+            employee_id: person.employeeId,
+          })
+        : Promise.resolve([]),
+    [person.employeeId, from, to],
+  );
+  const lateApplied = !(waiver.data ?? []).length;
+  const [lateConfirm, setLateConfirm] = useState<boolean | null>(null);
   const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
   const lateTotal = (late.data ?? []).filter((l) => l.late_minutes > 0).reduce((sum, l) => sum + l.late_seconds, 0);
   const nightDays = (late.data ?? []).filter((l) => l.night_seconds > 0);
@@ -748,6 +762,9 @@ function PersonQuincena({
           </span>
         )}
         {faltas > 0 && <span className="badge danger" title="Días con turno en el horario y sin marcas">{faltas} falta{faltas === 1 ? "" : "s"}</span>}
+        {person.employeeId && !lateApplied && (
+          <span className="badge warn" title="RRHH decidió no aplicar las llegadas tarde de esta quincena">No se aplican las llegadas tarde</span>
+        )}
         {workedOff > 0 && <span className="badge warn" title="Días que el horario marca como descanso y tienen marcas">Marcó {workedOff} día{workedOff === 1 ? "" : "s"} de descanso</span>}
         {(punches.loading || late.loading) && <div className="spinner" style={{ width: 16, height: 16 }} />}
       </div>
@@ -857,6 +874,26 @@ function PersonQuincena({
         </table>
       </div>
       <div className="modal-foot">
+        {canEdit && person.employeeId && (
+          <>
+            <button
+              className="btn ghost"
+              onClick={() => setLateConfirm(false)}
+              disabled={!lateApplied}
+              title="No contar las llegadas tarde de esta persona en la quincena"
+            >
+              No aplicar llegadas tarde
+            </button>
+            <button
+              className="btn ghost"
+              onClick={() => setLateConfirm(true)}
+              disabled={lateApplied}
+              title="Volver a contar las llegadas tarde de esta persona en la quincena"
+            >
+              Aplicar llegadas tarde
+            </button>
+          </>
+        )}
         {canEdit && (
           <button className="btn ghost" onClick={onEditAll} title="Corregir horario y marcas de todos los días del periodo">
             Editar todo el periodo
@@ -864,6 +901,81 @@ function PersonQuincena({
         )}
         <button className="btn" onClick={onClose}>
           Cerrar
+        </button>
+      </div>
+      {lateConfirm !== null && person.employeeId && (
+        <LatenessWaiverConfirm
+          apply={lateConfirm}
+          employeeId={person.employeeId}
+          workDate={from}
+          name={person.name}
+          onClose={() => setLateConfirm(null)}
+          onDone={() => {
+            setLateConfirm(null);
+            late.reload();
+            waiver.reload();
+          }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+/** Confirmación para aplicar o no las llegadas tarde del empleado en la quincena que se está viendo.
+ *  apply=true vuelve a contarlas; apply=false las deja sin aplicar. */
+function LatenessWaiverConfirm({
+  apply,
+  employeeId,
+  workDate,
+  name,
+  onClose,
+  onDone,
+}: {
+  apply: boolean;
+  employeeId: number;
+  workDate: string;
+  name: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put("/attendance/lateness-waivers", { employee_id: employeeId, work_date: workDate, apply });
+      onDone();
+    } catch (err) {
+      setError((err as ApiError).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title={apply ? "Aplicar llegadas tarde" : "No aplicar llegadas tarde"} onClose={onClose}>
+      <div className="stack">
+        <p>
+          {apply ? (
+            <>
+              Las llegadas tarde de <b>{name ?? "este empleado"}</b> <b>volverán a contar</b> en esta quincena.
+            </>
+          ) : (
+            <>
+              Las llegadas tarde de <b>{name ?? "este empleado"}</b> de esta quincena <b>no se aplicarán</b>: su tardanza quedará en cero.
+            </>
+          )}
+        </p>
+        <p className="caption">Afecta solo a esta persona y a la quincena que estás viendo. Puedes revertirlo con la otra opción.</p>
+      </div>
+      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose} disabled={busy}>
+          Cancelar
+        </button>
+        <button className="btn" onClick={confirm} disabled={busy}>
+          {busy ? "Guardando…" : apply ? "Aplicar" : "No aplicar"}
         </button>
       </div>
     </Modal>

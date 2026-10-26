@@ -60,3 +60,30 @@ def test_night_hours_from_seven_pm(login):
         "2026-09-16": 0,
         "2026-09-17": 0,
     }
+
+
+def test_lateness_waiver_per_quincena(login):
+    """RRHH puede decidir que a un empleado no se le apliquen las llegadas tarde de una quincena."""
+    client = login("rrhh")
+    emp = _employee(client, badge_number="85")
+    _shift(client, emp["id"], "2026-09-16")
+    attlog = b"85\t2026-09-16 08:20:00\t1\t4\t1\t0\n"  # 20 min tarde, 2.a quincena de septiembre
+    assert client.post("/api/attendance/imports", files={"file": ("BINH221860214_attlog.dat", attlog, "text/plain")}).status_code == 201
+
+    params = {"date_from": "2026-09-16", "date_to": "2026-09-16", "employee_id": emp["id"]}
+    base = client.get("/api/attendance/lateness", params=params).json()
+    assert base[0]["late_minutes"] == 20 and base[0]["counted_minutes"] == 5  # 20 - 15 perdonados
+
+    # No aplicar las llegadas tarde de esa quincena: la tardanza del día pasa a 0.
+    r = client.put("/api/attendance/lateness-waivers", json={"employee_id": emp["id"], "work_date": "2026-09-16", "apply": False})
+    assert r.status_code == 200 and r.json() == {"employee_id": emp["id"], "quincena_start": "2026-09-16", "applied": False}
+    assert client.get("/api/attendance/lateness-waivers", params=params).json() == [
+        {"employee_id": emp["id"], "quincena_start": "2026-09-16", "applied": False}
+    ]
+    off = client.get("/api/attendance/lateness", params=params).json()
+    assert off[0]["late_minutes"] == 0 and off[0]["late_seconds"] == 0 and off[0]["counted_minutes"] == 0
+
+    # Volver a aplicar: la tardanza regresa.
+    assert client.put("/api/attendance/lateness-waivers", json={"employee_id": emp["id"], "work_date": "2026-09-16", "apply": True}).status_code == 200
+    assert client.get("/api/attendance/lateness-waivers", params=params).json() == []
+    assert client.get("/api/attendance/lateness", params=params).json()[0]["late_minutes"] == 20

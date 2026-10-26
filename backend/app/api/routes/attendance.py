@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, Staff
 from app.core.config import get_settings
-from app.models import AREAS, AppSetting, Device, Employee, ImportBatch, Punch, ShiftAssignment
+from app.models import AREAS, AppSetting, Device, Employee, ImportBatch, LatenessWaiver, Punch, ShiftAssignment
 from app.schemas import (
     BadgeLinkIn,
     CutDate,
@@ -16,6 +16,8 @@ from app.schemas import (
     DeviceOut,
     ImportBatchOut,
     LatenessOut,
+    LatenessWaiverIn,
+    LatenessWaiverOut,
     LocalesOut,
     LocalOut,
     Page,
@@ -31,7 +33,7 @@ from app.services.attendance_import import (
     known_locals,
     recompute_double_taps,
 )
-from app.services.lateness import lateness
+from app.services.lateness import lateness, quincena_start
 from app.services.storage import get_storage
 from app.services.zk_attlog import normalize_badge
 
@@ -249,6 +251,38 @@ def list_lateness(db: DB, _: Staff, date_from: date, date_to: date, area: AreaPa
     if date_to < date_from or (date_to - date_from).days > 93:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rango de fechas inválido (máx. 3 meses)")
     return [LatenessOut(**vars(d)) for d in lateness(db, date_from, date_to, area, employee_id)]
+
+
+@router.get("/attendance/lateness-waivers", response_model=list[LatenessWaiverOut])
+def list_lateness_waivers(db: DB, _: Staff, date_from: date, date_to: date, employee_id: int | None = None):
+    """Quincenas (por su día de inicio) en que NO se aplican las llegadas tarde, dentro del rango."""
+    stmt = select(LatenessWaiver).where(LatenessWaiver.quincena_start.between(quincena_start(date_from), date_to))
+    if employee_id:
+        stmt = stmt.where(LatenessWaiver.employee_id == employee_id)
+    return [LatenessWaiverOut(employee_id=w.employee_id, quincena_start=w.quincena_start, applied=False) for w in db.scalars(stmt)]
+
+
+@router.put("/attendance/lateness-waivers", response_model=LatenessWaiverOut)
+def set_lateness_waiver(data: LatenessWaiverIn, db: DB, user: HR):
+    """Decide si al empleado se le aplican o no las llegadas tarde en la quincena de work_date.
+    apply=False crea la excepción (no aplicar); apply=True la quita (volver a aplicar)."""
+    if db.get(Employee, data.employee_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
+    qs = quincena_start(data.work_date)
+    existing = db.scalar(
+        select(LatenessWaiver).where(LatenessWaiver.employee_id == data.employee_id, LatenessWaiver.quincena_start == qs)
+    )
+    if data.apply:
+        if existing is not None:
+            db.delete(existing)
+    elif existing is None:
+        db.add(LatenessWaiver(employee_id=data.employee_id, quincena_start=qs, created_by_id=user.id))
+    audit.record(
+        db, user, "aplicar" if data.apply else "no_aplicar", "lateness_waiver", data.employee_id,
+        {"empleado": data.employee_id, "quincena": qs.isoformat()},
+    )
+    db.commit()
+    return LatenessWaiverOut(employee_id=data.employee_id, quincena_start=qs, applied=data.apply)
 
 
 def _active_punch(db: DB, punch_id: int) -> Punch:

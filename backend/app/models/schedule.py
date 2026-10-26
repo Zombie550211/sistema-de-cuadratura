@@ -107,6 +107,20 @@ class HolidayWorker(Base):
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), primary_key=True, index=True)
 
 
+class LatenessWaiver(Base):
+    """Quincena en la que, por decisión de RRHH, al empleado NO se le cuentan las llegadas tarde.
+    La fila existe = «no aplicar» en esa quincena (identificada por su día de inicio: el 1 o el 16).
+    Si no hay fila, las llegadas tarde se aplican con normalidad."""
+
+    __tablename__ = "lateness_waivers"
+    __table_args__ = (UniqueConstraint("employee_id", "quincena_start", name="uq_lateness_waivers_employee_quincena"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    quincena_start: Mapped[date] = mapped_column(Date, index=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
 class VacationPeriod(TimestampMixin, Base):
     """Lo que RRHH anotó de un período de vacaciones (un año desde el aniversario de ingreso):
     días que el empleado trabajó en lugar de descansar, o el período ya cerrado como completo.

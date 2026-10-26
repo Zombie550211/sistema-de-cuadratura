@@ -285,6 +285,22 @@ class ShiftDayOffIn(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
+class LatenessWaiverIn(BaseModel):
+    """Aplicar (apply=True) o no (apply=False) las llegadas tarde del empleado en la quincena
+    a la que pertenece work_date (cualquier día de esa quincena sirve)."""
+
+    employee_id: int
+    work_date: date
+    apply: bool
+
+
+class LatenessWaiverOut(BaseModel):
+    employee_id: int
+    quincena_start: date
+    # True = se aplican las llegadas tarde (sin excepción); False = no se aplican esta quincena.
+    applied: bool
+
+
 class ShiftDayOffUpdateIn(BaseModel):
     """Editar un día libre/compensatorio ya existente: cambiar la fecha y/o la nota
     (p. ej. el asueto que compensa). El tipo y el empleado no cambian."""
