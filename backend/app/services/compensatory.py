@@ -5,8 +5,9 @@ El cálculo sale de las marcaciones, así que al importar el archivo del reloj l
 quedan ganados solos. Un asueto del que no se ha importado ninguna marca (de nadie) no cuenta
 como perdido: aún faltan los datos del reloj de ese día.
 
-Los asuetos del año anteriores a las marcaciones (antes del 15/09/2026) no tienen datos del reloj:
-RRHH anota a mano quién los trabajó (HolidayWorker) y solo a esas personas les cuentan como ganados.
+Los asuetos anteriores al 15/09/2026 NO cuentan para el saldo (no había marcaciones). RRHH anota
+a mano quién los trabajó (HolidayWorker) y esos asuetos siguen MOSTRÁNDOSE en la lista de cada
+persona, pero no suman al saldo ni se pueden gastar: solo cuentan los del 15/09 en adelante.
 """
 
 import re
@@ -86,7 +87,9 @@ class CompensatoryStatus:
 
     @property
     def balance(self) -> int:
-        return len(self.earned) - self.taken
+        # Solo cuentan los asuetos del 15/09/2026 en adelante; los anteriores se muestran
+        # (en `earned`) pero no suman al saldo.
+        return sum(1 for h in self.earned if h.day >= START) - self.taken
 
 
 TAG = re.compile(r"Compensatorio (\d{2}/\d{2}/\d{4})")
@@ -162,6 +165,8 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
         s = CompensatoryStatus(e.id, taken=sum(used(n) for n in notes.get(e.id, [])))
         for h in every:
             if h.day < START:
+                # Antes del 15-09-2026 no hay marcaciones: si RRHH anotó que lo trabajó, el asueto
+                # se MUESTRA en su lista (earned), pero no cuenta para el saldo (ver balance).
                 if (e.id, h.id) in worked_before:
                     s.earned.append(h)
                 continue
@@ -171,6 +176,7 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
                 s.earned.append(h)
             elif h.day in days_with_data:
                 s.lost.append(h)
-        s.available = unused(s.earned, notes.get(e.id, []))
+        # Solo se pueden gastar los del 15/09 en adelante.
+        s.available = unused([h for h in s.earned if h.day >= START], notes.get(e.id, []))
         out.append(s)
     return out

@@ -121,12 +121,13 @@ def test_holiday_with_punch_earns_compensatory_and_without_is_lost(client, login
     assert status[absent["id"]]["earned"] == [] and [h["day"] for h in status[absent["id"]]["lost"]] == ["2026-09-15"]
 
 
-def test_holiday_before_punches_counts_only_for_who_hr_marked(login):
+def test_holiday_before_cutoff_is_recorded_but_not_counted(login):
     hr = login("rrhh")
     worked = _employee(hr, code="E-012", first_name="Ana", hire_date="2020-01-01")
     other = _employee(hr, code="E-013", first_name="Luis", hire_date="2020-01-01")
     holidays = {h["day"]: h for h in hr.get("/api/schedules/holidays", params={"year": 2026}).json()}
 
+    # RRHH puede anotar quién trabajó un asueto anterior al 15/09 (queda visible)…
     may = holidays["2026-05-01"]["id"]
     r = hr.put(f"/api/schedules/holidays/{may}/workers", json={"employee_ids": [worked["id"]]})
     assert r.status_code == 200 and r.json() == [worked["id"]]
@@ -134,28 +135,71 @@ def test_holiday_before_punches_counts_only_for_who_hr_marked(login):
     # Los del 15/09 en adelante salen de las marcaciones, no se anotan a mano.
     assert hr.put(f"/api/schedules/holidays/{holidays['2026-09-15']['id']}/workers", json={"employee_ids": []}).status_code == 422
 
+    # …el asueto previo al 15/09 se MUESTRA (earned) pero NO cuenta para el saldo ni se puede gastar.
     status = {s["employee_id"]: s for s in hr.get("/api/schedules/compensatory").json()}
-    assert [h["day"] for h in status[worked["id"]]["available"]] == ["2026-05-01"]
-    assert status[worked["id"]]["balance"] == 1
+    assert [h["day"] for h in status[worked["id"]]["earned"]] == ["2026-05-01"]
+    assert status[worked["id"]]["available"] == [] and status[worked["id"]]["balance"] == 0
     assert status[other["id"]]["earned"] == [] and status[other["id"]]["lost"] == []
 
 
-def test_one_day_can_use_two_compensatories(login):
+def test_one_day_can_use_two_compensatories(client, login, db):
+    from datetime import datetime
+
+    from app.models import Device, ImportBatch, Punch
+
     hr = login("rrhh")
     emp = _employee(hr, code="E-014", first_name="Ana", hire_date="2020-01-01")
-    holidays = {h["day"]: h for h in hr.get("/api/schedules/holidays", params={"year": 2026}).json()}
-    for day in ("2026-01-01", "2026-05-01", "2026-06-17"):
-        hr.put(f"/api/schedules/holidays/{holidays[day]['id']}/workers", json={"employee_ids": [emp["id"]]})
+    device = Device(serial_number="TEST-2", name="Test")
+    db.add(device)
+    db.flush()
+    batch = ImportBatch(device_id=device.id, original_filename="b.dat", sha256="y" * 64, storage_key="b.dat")
+    db.add(batch)
+    db.flush()
+    # Gana el compensatorio del 15/09 marcando ese asueto (desde el 15/09 cuenta por marcación).
+    db.add(Punch(device_id=device.id, badge="14", employee_id=emp["id"], punched_at=datetime.fromisoformat("2026-09-15T07:05:00-06:00"), import_batch_id=batch.id))
+    db.commit()
 
     # Uno por uno, el mismo día: el segundo se suma al primero.
-    for note in ("Compensatorio 01/01/2026 (Año Nuevo)", "Compensatorio 17/06/2026 (Día del Padre)"):
+    for note in ("Compensatorio 15/09/2026 (Día de la Independencia)", "Compensatorio 02/11/2026 (Día de los Difuntos)"):
         r = hr.post("/api/schedules/days-off", json={"employee_id": emp["id"], "work_date": "2026-10-30", "kind": "compensatorio", "notes": note})
         assert r.status_code == 201, r.text
-    assert r.json()["notes"] == "Compensatorio 01/01/2026 (Año Nuevo) · Compensatorio 17/06/2026 (Día del Padre)"
+    assert r.json()["notes"] == "Compensatorio 15/09/2026 (Día de la Independencia) · Compensatorio 02/11/2026 (Día de los Difuntos)"
 
+    # El día gastó dos asuetos nombrados en la nota (taken=2), aunque solo uno estaba ganado.
     status = next(s for s in hr.get("/api/schedules/compensatory").json() if s["employee_id"] == emp["id"])
-    assert (status["taken"], status["balance"]) == (2, 1)
-    assert [h["day"] for h in status["available"]] == ["2026-05-01"]
+    assert (status["taken"], status["balance"]) == (2, -1)
+    assert status["available"] == []
+
+
+def test_edit_taken_compensatory_day(client, login, db):
+    from datetime import datetime
+
+    from app.models import Device, ImportBatch, Punch
+
+    hr = login("rrhh")
+    emp = _employee(hr, code="E-015", first_name="Ana", hire_date="2020-01-01")
+    device = Device(serial_number="TEST-3", name="Test")
+    db.add(device)
+    db.flush()
+    batch = ImportBatch(device_id=device.id, original_filename="c.dat", sha256="z" * 64, storage_key="c.dat")
+    db.add(batch)
+    db.flush()
+    db.add(Punch(device_id=device.id, badge="15", employee_id=emp["id"], punched_at=datetime.fromisoformat("2026-09-15T07:05:00-06:00"), import_batch_id=batch.id))
+    db.commit()
+
+    r = hr.post("/api/schedules/days-off", json={"employee_id": emp["id"], "work_date": "2026-10-20", "kind": "compensatorio", "notes": "Compensatorio 15/09/2026 (Día de la Independencia)"})
+    assert r.status_code == 201, r.text
+    off_id = r.json()["id"]
+
+    # Cambiar la fecha tomada: el conteo no cambia (sigue 1 tomado, saldo 0).
+    r = hr.put(f"/api/schedules/days-off/{off_id}", json={"work_date": "2026-10-21"})
+    assert r.status_code == 200 and r.json()["work_date"] == "2026-10-21"
+    status = next(s for s in hr.get("/api/schedules/compensatory").json() if s["employee_id"] == emp["id"])
+    assert (status["taken"], status["balance"]) == (1, 0)
+
+    # No se puede mover a una fecha que ya tiene un día marcado.
+    assert hr.post("/api/schedules/days-off", json={"employee_id": emp["id"], "work_date": "2026-10-25", "kind": "compensatorio", "notes": "x"}).status_code == 201
+    assert hr.put(f"/api/schedules/days-off/{off_id}", json={"work_date": "2026-10-25"}).status_code == 409
 
 
 def test_compensatory_note_uses_that_holiday(db):

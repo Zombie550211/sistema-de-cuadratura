@@ -20,6 +20,7 @@ from app.schemas import (
     LeaveBulkOut,
     ShiftDayOffIn,
     ShiftDayOffOut,
+    ShiftDayOffUpdateIn,
     ShiftTemplateIn,
     ShiftTemplateOut,
     ShiftUpdateIn,
@@ -458,6 +459,42 @@ def assign_leave(data: LeaveBulkIn, db: DB, user: HR, background: BackgroundTask
     db.commit()
     background.add_task(crm_push.flush_in_background)
     return LeaveBulkOut(days=len(dates) * len(employee_ids), shifts_removed=removed)
+
+
+@router.put("/days-off/{day_off_id}", response_model=ShiftDayOffOut)
+def update_day_off(day_off_id: int, data: ShiftDayOffUpdateIn, db: DB, user: HR, background: BackgroundTasks):
+    """Edita un día libre/compensatorio ya existente: cambia la fecha y/o la nota (p. ej. el asueto
+    que compensa). Si cambia la fecha, quita el turno de la nueva fecha y avisa al CRM de ambas."""
+    off = db.get(ShiftDayOff, day_off_id)
+    if off is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Día libre no encontrado")
+    old_date = off.work_date
+    if data.work_date != old_date:
+        clash = db.scalar(
+            select(ShiftDayOff.id).where(
+                ShiftDayOff.employee_id == off.employee_id, ShiftDayOff.work_date == data.work_date, ShiftDayOff.id != off.id
+            )
+        )
+        if clash is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Ya hay un día marcado en esa fecha")
+        removed = db.scalar(
+            select(ShiftAssignment).where(ShiftAssignment.employee_id == off.employee_id, ShiftAssignment.work_date == data.work_date)
+        )
+        if removed is not None:
+            db.delete(removed)
+    off.work_date = data.work_date
+    if data.notes is not None:
+        off.notes = data.notes
+    off.source = "rrhh"
+    db.flush()
+    audit.record(
+        db, user, "editar", "shift_day_off", off.id,
+        {"empleado": off.employee_id, "fecha_antes": old_date.isoformat(), "fecha": data.work_date.isoformat(), "tipo": off.kind},
+    )
+    crm_push.queue(db, [(off.employee_id, old_date), (off.employee_id, data.work_date)])
+    db.commit()
+    background.add_task(crm_push.flush_in_background)
+    return off
 
 
 @router.delete("/days-off/{day_off_id}", status_code=status.HTTP_204_NO_CONTENT)

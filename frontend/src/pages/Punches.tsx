@@ -53,7 +53,7 @@ interface PersonRow {
   days: DayRow[];
 }
 
-type Dialog = { kind: "edit" | "delete" | "link"; row: DayRow } | null;
+type Dialog = { kind: "edit" | "delete" | "link" | "compensatorio"; row: DayRow } | null;
 
 
 function entry(punches: Punch[]) {
@@ -508,6 +508,7 @@ export function Punches() {
       {dialog?.kind === "edit" && <EditDay row={dialog.row} onChanged={reload} onDone={changed} />}
       {dialog?.kind === "link" && <LinkBadge row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
       {dialog?.kind === "delete" && <DeleteDay row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
+      {dialog?.kind === "compensatorio" && <CoverWithCompensatory row={dialog.row} onClose={() => setDialog(null)} onDone={changed} />}
     </div>
   );
 }
@@ -722,6 +723,11 @@ function PersonQuincena({
       ignored: 0,
     };
     const list: RowAction[] = [{ label: "Editar", onClick: () => onAction({ kind: "edit", row }) }];
+    // Día con turno sin marca (faltó): cubrirlo con un compensatorio en vez de reponer el horario.
+    // Marca ese día como compensatorio y gasta uno de su saldo.
+    if (person.employeeId && check(date) === "falta" && offByDate.get(date)?.kind !== "compensatorio") {
+      list.push({ label: "Cubrir con compensatorio (gasta 1 del saldo)", onClick: () => onAction({ kind: "compensatorio", row }) });
+    }
     if (!r) return list;
     if (!r.name) list.push({ label: "Asignar a un empleado", onClick: () => onAction({ kind: "link", row: r }) });
     list.push({ label: "Eliminar marcas del día", danger: true, onClick: () => onAction({ kind: "delete", row: r }) });
@@ -1414,6 +1420,53 @@ function DeleteDay({ row, onClose, onDone }: { row: DayRow; onClose: () => void;
         </button>
         <button className="btn danger" onClick={confirm} disabled={busy}>
           {busy ? "Eliminando…" : "Eliminar"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Cubrir con compensatorio un día con turno sin marca: lo marca como compensatorio (así deja de
+ *  contar como falta) y gasta uno del saldo del empleado. Reemplaza al «reponer horario» cuando el
+ *  agente no vino ni marcó y se le cubre el día con un compensatorio. */
+function CoverWithCompensatory({ row, onClose, onDone }: { row: DayRow; onClose: () => void; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirm() {
+    if (!row.employeeId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post("/schedules/days-off", {
+        employee_id: row.employeeId,
+        work_date: row.date,
+        kind: "compensatorio",
+        notes: "Compensatorio (cubre día sin marca)",
+      });
+      onDone();
+    } catch (err) {
+      setError((err as ApiError).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Cubrir con compensatorio" onClose={onClose}>
+      <div className="stack">
+        <p>
+          El {fmtLongDate(row.date).toLowerCase()} de <b>{row.name ?? `ID ${row.badge}`}</b> quedará marcado como <b>compensatorio</b> y dejará de
+          contar como falta.
+        </p>
+        <p className="caption">Gasta uno del saldo de compensatorios del empleado. Si no le queda saldo, su balance quedará en negativo.</p>
+      </div>
+      {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose} disabled={busy}>
+          Cancelar
+        </button>
+        <button className="btn" onClick={confirm} disabled={busy}>
+          {busy ? "Guardando…" : "Cubrir con compensatorio"}
         </button>
       </div>
     </Modal>

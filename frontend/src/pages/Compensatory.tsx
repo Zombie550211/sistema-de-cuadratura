@@ -111,10 +111,13 @@ export function Compensatory() {
   const withBalance = all.filter((e) => (compOf.get(e.id)?.balance ?? 0) > 0);
   const balanceDays = withBalance.reduce((s, e) => s + compOf.get(e.id)!.balance, 0);
   const negative = all.filter((e) => (compOf.get(e.id)?.balance ?? 0) < 0).length;
-  const earnedYear = [...holidayStats.values()].reduce((s, x) => s + x.earned, 0);
-  const lostYear = [...holidayStats.values()].reduce((s, x) => s + x.lost, 0);
+  // Los totales de arriba solo cuentan del 15/09/2026 en adelante; los asuetos y días
+  // anteriores siguen viéndose por persona, pero fuera de estas estadísticas.
+  const countedHolidays = yearHolidays.filter((h) => h.day >= START);
+  const earnedYear = countedHolidays.reduce((s, h) => s + (holidayStats.get(h.id)?.earned ?? 0), 0);
+  const lostYear = countedHolidays.reduce((s, h) => s + (holidayStats.get(h.id)?.lost ?? 0), 0);
   const ids = new Set(all.map((e) => e.id));
-  const takenYear = (days.data ?? []).filter((d) => ids.has(d.employee_id)).length;
+  const takenYear = (days.data ?? []).filter((d) => ids.has(d.employee_id) && d.work_date >= START).length;
   const offToday = (days.data ?? []).filter((d) => ids.has(d.employee_id) && d.work_date === now).length;
   const nextHoliday = yearHolidays.find((h) => h.day >= now);
 
@@ -498,6 +501,10 @@ export function Compensatory() {
             setGiving(viewing);
             setViewing(null);
           }}
+          onChanged={() => {
+            comp.reload();
+            days.reload();
+          }}
           onClose={() => setViewing(null)}
         />
       )}
@@ -657,12 +664,14 @@ function CompensatoryDetail({
   status,
   canEdit,
   onGive,
+  onChanged,
   onClose,
 }: {
   employee: Employee;
   status?: CompensatoryStatus;
   canEdit: boolean;
   onGive: () => void;
+  onChanged: () => void;
   onClose: () => void;
 }) {
   const taken = useAsync(
@@ -672,10 +681,14 @@ function CompensatoryDetail({
       ),
     [employee.id],
   );
+  const [editing, setEditing] = useState<ShiftDayOff | null>(null);
   const earned = status?.earned ?? [];
   const pending = status?.available ?? [];
   const lost = status?.lost ?? [];
   const rows = takenWithHoliday(earned, taken.data ?? []);
+  // Para no repetir el botón de editar cuando un día compensa dos asuetos (dos filas, un día).
+  const firstRowOfDay = new Map<number, number>();
+  rows.forEach(({ day }, i) => firstRowOfDay.has(day.id) || firstRowOfDay.set(day.id, i));
   const balance = status?.balance ?? 0;
   const now = today();
 
@@ -729,6 +742,11 @@ function CompensatoryDetail({
                     </small>
                   </span>
                   <span className={`lv-status${holiday ? " ok" : " warn"}`}>{day.work_date > now ? "Programado" : holiday ? "Tomado" : "Saldo negativo"}</span>
+                  {canEdit && firstRowOfDay.get(day.id) === i && (
+                    <button className="btn ghost sm" onClick={() => setEditing(day)}>
+                      Editar
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -755,6 +773,88 @@ function CompensatoryDetail({
             Dar un compensatorio pendiente
           </button>
         )}
+      </div>
+      {editing && (
+        <EditCompensatoryModal
+          day={editing}
+          earned={earned}
+          onClose={() => setEditing(null)}
+          onDone={() => {
+            setEditing(null);
+            taken.reload();
+            onChanged();
+          }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+/** Editar un día compensatorio ya tomado: cambiar el día en que se tomó y/o qué asueto(s) compensa. */
+function EditCompensatoryModal({ day, earned, onClose, onDone }: { day: ShiftDayOff; earned: Holiday[]; onClose: () => void; onDone: () => void }) {
+  const [date, setDate] = useState(day.work_date);
+  // Solo se pueden gastar los asuetos del 15/09 en adelante (los previos no cuentan).
+  const countable = earned.filter((h) => h.day >= START);
+  const tagged = new Set([...(day.notes ?? "").matchAll(/Compensatorio (\d{2}\/\d{2}\/\d{4})/g)].map((m) => m[1]));
+  const [picked, setPicked] = useState<Set<number>>(() => new Set(countable.filter((h) => tagged.has(fmtDate(h.day))).map((h) => h.id)));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = (id: number) => {
+    const n = new Set(picked);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    setPicked(n);
+  };
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const chosen = countable.filter((h) => picked.has(h.id));
+      const notes = chosen.map((h) => `Compensatorio ${fmtDate(h.day)} (${h.name})`).join(" · ");
+      await api.put(`/schedules/days-off/${day.id}`, { work_date: date, notes });
+      onDone();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Editar compensatorio" subtitle={`Tomado el ${fmtDate(day.work_date)}`} onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {error && <div className="alert">{error}</div>}
+        <label className="modal-sec">
+          <span className="modal-label">Día en que se toma</span>
+          <input className="input" type="date" min={START} value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+        <div className="modal-sec">
+          <span className="modal-label">
+            Asueto que compensa<small>marca el o los asuetos trabajados que gasta este día</small>
+          </span>
+          {countable.length ? (
+            <div className="emp-picker">
+              {countable.map((h) => (
+                <label key={h.id} className="check">
+                  <input type="checkbox" checked={picked.has(h.id)} onChange={() => toggle(h.id)} />
+                  {fmtDate(h.day)} <span className="caption">· {h.name}</span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <span className="caption">No tiene asuetos trabajados desde el 15/09 para respaldar este día.</span>
+          )}
+        </div>
+      </div>
+      <div className="modal-foot">
+        <button className="btn ghost" onClick={onClose} disabled={busy}>
+          Cancelar
+        </button>
+        <button className="btn" onClick={save} disabled={busy || !date}>
+          {busy ? "Guardando…" : "Guardar"}
+        </button>
       </div>
     </Modal>
   );

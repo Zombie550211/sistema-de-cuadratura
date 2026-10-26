@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-import { IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconRepeat, IconSearch, IconSim, IconTrash, IconX } from "../components/Icons";
+import { IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconHouse, IconPlus, IconRepeat, IconSearch, IconSim, IconTrash, IconX } from "../components/Icons";
 import { ConfirmDelete } from "../components/RowMenu";
 import { Modal } from "../components/Modal";
 import { useCollapsedTeams } from "../components/TeamGroups";
@@ -577,6 +577,12 @@ export function Schedules({ area }: { area: Area }) {
                                     .filter(Boolean)
                                     .join(" · ")}
                                 >
+                                  {/* Compensatorio ya tomado: chequecito para que se vea de un vistazo que ese día se gastó. */}
+                                  {off.kind === "compensatorio" && (
+                                    <i className="sch-off-check" style={{ background: dayOffColor(off) }} aria-hidden>
+                                      <IconCheck width={11} height={11} />
+                                    </i>
+                                  )}
                                   {dayOffLabel(off)}
                                 </span>
                               ) : (

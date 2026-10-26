@@ -285,6 +285,14 @@ class ShiftDayOffIn(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
+class ShiftDayOffUpdateIn(BaseModel):
+    """Editar un día libre/compensatorio ya existente: cambiar la fecha y/o la nota
+    (p. ej. el asueto que compensa). El tipo y el empleado no cambian."""
+
+    work_date: date
+    notes: str | None = Field(default=None, max_length=500)
+
+
 class ShiftDayOffOut(ORM):
     id: int
     employee_id: int
