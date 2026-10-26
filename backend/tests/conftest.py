@@ -60,6 +60,16 @@ def client(db):
         yield c
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_guard():
+    """El freno de fuerza bruta guarda contadores en memoria del proceso; se vacían
+    antes de cada prueba para que los muchos logins de la suite no choquen con el 429."""
+    from app.core import login_guard
+
+    login_guard._reset()
+    yield
+
+
 @pytest.fixture
 def login(client, db):
     def _login(role="admin"):

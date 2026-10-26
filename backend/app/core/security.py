@@ -22,6 +22,12 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
+# Hash ficticio para igualar el tiempo del login cuando el usuario no existe: así
+# verify_password tarda lo mismo con o sin usuario y el tiempo de respuesta no
+# delata qué usuarios existen (enumeración por tiempos). Se calcula una vez al importar.
+DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(16))
+
+
 def create_access_token(user_id: int) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
