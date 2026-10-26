@@ -121,6 +121,20 @@ class LatenessWaiver(Base):
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
+class PayrollMark(Base):
+    """Empleado ya agregado a planilla («cuadrado») en un periodo. La fila existe = marcado como
+    «ya agregado a planilla» para el periodo que empieza en period_start (la quincena o el corte
+    que se está viendo en Marcaciones)."""
+
+    __tablename__ = "payroll_marks"
+    __table_args__ = (UniqueConstraint("employee_id", "period_start", name="uq_payroll_marks_employee_period"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    period_start: Mapped[date] = mapped_column(Date, index=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
 class VacationPeriod(TimestampMixin, Base):
     """Lo que RRHH anotó de un período de vacaciones (un año desde el aniversario de ingreso):
     días que el empleado trabajó en lugar de descansar, o el período ya cerrado como completo.

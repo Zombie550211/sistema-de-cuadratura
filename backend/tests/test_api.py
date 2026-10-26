@@ -129,6 +129,22 @@ def test_baja_clears_badge_and_fingerprints(login):
     assert emp["id"] in [e["id"] for e in passive["items"]]
 
 
+def test_payroll_mark_per_period(login):
+    """«Ya agregado a planilla»: marca por empleado y periodo, independiente de otros periodos."""
+    client = login("rrhh")
+    emp = _employee(client, code="E-060", first_name="Rosa", badge_number="90")
+    p1, p2 = {"period_start": "2026-09-16"}, {"period_start": "2026-10-01"}
+
+    assert client.get("/api/attendance/payroll-marks", params=p1).json() == []
+    r = client.put("/api/attendance/payroll-marks", json={"employee_id": emp["id"], **p1, "done": True})
+    assert r.status_code == 200 and r.json() == {"employee_id": emp["id"], "period_start": "2026-09-16", "done": True}
+    assert client.get("/api/attendance/payroll-marks", params=p1).json() == [emp["id"]]
+    assert client.get("/api/attendance/payroll-marks", params=p2).json() == []  # otro periodo no lo hereda
+
+    assert client.put("/api/attendance/payroll-marks", json={"employee_id": emp["id"], **p1, "done": False}).status_code == 200
+    assert client.get("/api/attendance/payroll-marks", params=p1).json() == []
+
+
 def test_duplicate_badge_is_rejected(login):
     client = login("rrhh")
     _employee(client, badge_number="5")

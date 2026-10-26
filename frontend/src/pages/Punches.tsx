@@ -205,6 +205,11 @@ export function Punches() {
   const lateByKey = useMemo(() => new Map((late.data ?? []).map((l) => [`${l.employee_id}|${l.date}`, l])), [late.data]);
   // Días del horario del periodo (incapacidad, compensatorio, «No se presentó») de todos.
   const daysOff = useAsync(() => api.get<ShiftDayOff[]>("/schedules/days-off", { date_from: from, date_to: to }), [from, to]);
+  // Empleados ya agregados a planilla («cuadrados») en este periodo.
+  const payroll = useAsync(() => api.get<number[]>("/attendance/payroll-marks", { period_start: from }), [from]);
+  const paid = useMemo(() => new Set(payroll.data ?? []), [payroll.data]);
+  const togglePayroll = (employeeId: number, done: boolean) =>
+    api.put("/attendance/payroll-marks", { employee_id: employeeId, period_start: from, done }).then(() => payroll.reload());
 
   function selectTab(id: number) {
     setParams(
@@ -373,6 +378,7 @@ export function Punches() {
                   <th title="Días de incapacidad en Horarios">Incapacidad</th>
                   <th title="Días marcados «No se presentó» en Horarios y días con turno sin marcas">No se presentó</th>
                   <th title="Días de compensatorio en Horarios">Compensatorio</th>
+                  <th title="Marcar al empleado como ya agregado a planilla (cuadrado) en este periodo">Planilla</th>
                   <th />
                 </tr>
               </thead>
@@ -447,6 +453,21 @@ export function Punches() {
                       <DayListCell dates={dk.incapacidad} />
                       <DayListCell dates={dk.noShow} danger />
                       <DayListCell dates={dk.compensatorio} />
+                      <td className="nowrap" onClick={(e) => e.stopPropagation()}>
+                        {p.employeeId ? (
+                          <label className="check pn-payroll" title="Ya agregado a planilla — el empleado ya está cuadrado en este periodo">
+                            <input
+                              type="checkbox"
+                              checked={paid.has(p.employeeId)}
+                              disabled={!canEdit}
+                              onChange={(ev) => togglePayroll(p.employeeId!, ev.target.checked)}
+                            />
+                            <span className="caption">Ya agregado a planilla</span>
+                          </label>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
                       <td className="num nowrap">
                         <IconChevronRight width={18} height={18} className="muted" />
                       </td>

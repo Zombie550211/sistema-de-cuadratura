@@ -229,6 +229,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .form-section { grid-column: 1 / -1; margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--text); font-weight: 600; }
 .check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
 .check input { accent-color: var(--accent); width: 16px; height: 16px; }
+.pn-payroll { white-space: nowrap; }
+.pn-payroll input:checked + .caption { color: var(--accent); font-weight: 600; }
 .alert { padding: 12px 16px; border-radius: var(--r-sm); border: 1px solid var(--danger); color: var(--danger); background: var(--surface); }
 .alert.info { background: var(--accent-soft); }
 .alert.warn { background: var(--warn-soft); }

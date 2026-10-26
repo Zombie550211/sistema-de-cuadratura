@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, Staff
 from app.core.config import get_settings
-from app.models import AREAS, AppSetting, Device, Employee, ImportBatch, LatenessWaiver, Punch, ShiftAssignment
+from app.models import AREAS, AppSetting, Device, Employee, ImportBatch, LatenessWaiver, PayrollMark, Punch, ShiftAssignment
 from app.schemas import (
     BadgeLinkIn,
     CutDate,
@@ -18,6 +18,8 @@ from app.schemas import (
     LatenessOut,
     LatenessWaiverIn,
     LatenessWaiverOut,
+    PayrollMarkIn,
+    PayrollMarkOut,
     LocalesOut,
     LocalOut,
     Page,
@@ -283,6 +285,35 @@ def set_lateness_waiver(data: LatenessWaiverIn, db: DB, user: HR):
     )
     db.commit()
     return LatenessWaiverOut(employee_id=data.employee_id, quincena_start=qs, applied=data.apply)
+
+
+@router.get("/attendance/payroll-marks", response_model=list[int])
+def list_payroll_marks(db: DB, _: Staff, period_start: date, area: AreaParam = None):
+    """IDs de los empleados ya agregados a planilla («cuadrados») en el periodo dado."""
+    stmt = select(PayrollMark.employee_id).where(PayrollMark.period_start == period_start)
+    if area:
+        stmt = stmt.join(Employee, PayrollMark.employee_id == Employee.id).where(Employee.area == area)
+    return list(db.scalars(stmt))
+
+
+@router.put("/attendance/payroll-marks", response_model=PayrollMarkOut)
+def set_payroll_mark(data: PayrollMarkIn, db: DB, user: HR):
+    """Marca o desmarca a un empleado como «ya agregado a planilla» en el periodo dado."""
+    if db.get(Employee, data.employee_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
+    existing = db.scalar(
+        select(PayrollMark).where(PayrollMark.employee_id == data.employee_id, PayrollMark.period_start == data.period_start)
+    )
+    if data.done and existing is None:
+        db.add(PayrollMark(employee_id=data.employee_id, period_start=data.period_start, created_by_id=user.id))
+    elif not data.done and existing is not None:
+        db.delete(existing)
+    audit.record(
+        db, user, "planilla" if data.done else "quitar_planilla", "payroll_mark", data.employee_id,
+        {"empleado": data.employee_id, "periodo": data.period_start.isoformat()},
+    )
+    db.commit()
+    return PayrollMarkOut(employee_id=data.employee_id, period_start=data.period_start, done=data.done)
 
 
 def _active_punch(db: DB, punch_id: int) -> Punch:

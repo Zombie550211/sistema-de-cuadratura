@@ -285,6 +285,21 @@ class ShiftDayOffIn(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
+class PayrollMarkIn(BaseModel):
+    """Marcar (done=True) o desmarcar (done=False) a un empleado como «ya agregado a planilla»
+    en el periodo que empieza en period_start."""
+
+    employee_id: int
+    period_start: date
+    done: bool
+
+
+class PayrollMarkOut(BaseModel):
+    employee_id: int
+    period_start: date
+    done: bool
+
+
 class LatenessWaiverIn(BaseModel):
     """Aplicar (apply=True) o no (apply=False) las llegadas tarde del empleado en la quincena
     a la que pertenece work_date (cualquier día de esa quincena sirve)."""
