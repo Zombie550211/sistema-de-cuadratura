@@ -316,6 +316,22 @@ class LatenessWaiverOut(BaseModel):
     applied: bool
 
 
+class ManualCompensatoryIn(BaseModel):
+    """«Otro»: compensatorio concedido a mano por RRHH. earned_date es el día de donde salió y
+    note explica de dónde salió."""
+
+    employee_id: int
+    earned_date: date
+    note: str | None = Field(default=None, max_length=300)
+
+
+class ManualCompensatoryOut(ORM):
+    id: int
+    employee_id: int
+    earned_date: date
+    note: str | None
+
+
 class ShiftDayOffUpdateIn(BaseModel):
     """Editar un día libre/compensatorio ya existente: cambiar la fecha y/o la nota
     (p. ej. el asueto que compensa). El tipo y el empleado no cambian."""

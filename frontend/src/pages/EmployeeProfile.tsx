@@ -356,6 +356,25 @@ export function CompensatoryModal({
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // «Otro»: compensatorio concedido a mano (día de origen + nota); se suma a disponibles.
+  const [otroOpen, setOtroOpen] = useState(false);
+  const [otroDate, setOtroDate] = useState(today());
+  const [otroNote, setOtroNote] = useState("");
+
+  async function addOtro() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post("/schedules/manual-compensatories", { employee_id: employee.id, earned_date: otroDate, note: otroNote.trim() || null });
+      setOtroOpen(false);
+      setOtroNote("");
+      status.reload();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const first = `${month}-01`;
   const last = addDays(`${shiftMonth(month, 1)}-01`, -1);
@@ -415,6 +434,30 @@ export function CompensatoryModal({
             </div>
           </div>
         )}
+
+        <div className="modal-sec">
+          {!otroOpen ? (
+            <button type="button" className="btn ghost sm" onClick={() => setOtroOpen(true)} style={{ alignSelf: "flex-start" }}>
+              + Otro compensatorio (sin asueto)
+            </button>
+          ) : (
+            <div className="stack" style={{ gap: 10 }}>
+              <span className="modal-label">
+                Otro compensatorio<small>el día de donde salió y de dónde viene</small>
+              </span>
+              <input className="input" type="date" value={otroDate} onChange={(e) => setOtroDate(e.target.value)} aria-label="Día de origen" />
+              <input className="input" maxLength={300} placeholder="Nota: de dónde salió (ej. cubrió turno extra)" value={otroNote} onChange={(e) => setOtroNote(e.target.value)} />
+              <div className="row" style={{ gap: 8 }}>
+                <button type="button" className="btn sm" onClick={addOtro} disabled={busy || !otroDate}>
+                  Agregar a disponibles
+                </button>
+                <button type="button" className="btn ghost sm" onClick={() => setOtroOpen(false)} disabled={busy}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {chosen.length > 0 && (
           <label className="modal-sec">

@@ -12,6 +12,7 @@ import {
   LATE_ALLOWANCE,
   localName,
   NIGHT_START,
+  type CompensatoryStatus,
   type Employee,
   type ImportBatch,
   type Lateness,
@@ -23,7 +24,7 @@ import {
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { dayOffColor, dayOffLabel, isNoShow } from "../lib/shiftColors";
-import { addDays, fmtLongDate, fmtMinutes, fmtRange, fmtTime, fmtHms, fmtTimeSec, localDate, quincena, today } from "../lib/format";
+import { addDays, fmtDate, fmtLongDate, fmtMinutes, fmtRange, fmtTime, fmtHms, fmtTimeSec, localDate, quincena, today } from "../lib/format";
 import { downloadBlob, tableImage, type ImageCell, type ImageColumn } from "../lib/tableImage";
 import { useAsync } from "../lib/useAsync";
 import { ImportPanel } from "./Import";
@@ -1563,6 +1564,9 @@ function DeleteDay({ row, onClose, onDone }: { row: DayRow; onClose: () => void;
  *  contar como falta) y gasta uno del saldo del empleado. Reemplaza al «reponer horario» cuando el
  *  agente no vino ni marcó y se le cubre el día con un compensatorio. */
 function CoverWithCompensatory({ row, onClose, onDone }: { row: DayRow; onClose: () => void; onDone: () => void }) {
+  const comp = useAsync(() => api.get<CompensatoryStatus[]>("/schedules/compensatory"), []);
+  const available = comp.data?.find((c) => c.employee_id === row.employeeId)?.available ?? [];
+  const [chosen, setChosen] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1571,12 +1575,9 @@ function CoverWithCompensatory({ row, onClose, onDone }: { row: DayRow; onClose:
     setBusy(true);
     setError(null);
     try {
-      await api.post("/schedules/days-off", {
-        employee_id: row.employeeId,
-        work_date: row.date,
-        kind: "compensatorio",
-        notes: "Compensatorio (cubre día sin marca)",
-      });
+      const h = available.find((x) => x.id === chosen);
+      const notes = h ? `Compensatorio ${fmtDate(h.day)} (${h.name})` : "Compensatorio (cubre día sin marca)";
+      await api.post("/schedules/days-off", { employee_id: row.employeeId, work_date: row.date, kind: "compensatorio", notes });
       onDone();
     } catch (err) {
       setError((err as ApiError).message);
@@ -1591,6 +1592,23 @@ function CoverWithCompensatory({ row, onClose, onDone }: { row: DayRow; onClose:
           El {fmtLongDate(row.date).toLowerCase()} de <b>{row.name ?? `ID ${row.badge}`}</b> quedará marcado como <b>compensatorio</b> y dejará de
           contar como falta.
         </p>
+        <div className="modal-sec">
+          <span className="modal-label">
+            ¿Qué compensatorio gasta?<small>{comp.loading ? "cargando…" : available.length ? `${available.length} disponible${available.length === 1 ? "" : "s"}` : "sin disponibles"}</small>
+          </span>
+          <div className="emp-picker">
+            {available.map((h) => (
+              <label key={h.id} className="check">
+                <input type="radio" name="cover-comp" checked={chosen === h.id} onChange={() => setChosen(h.id)} />
+                {fmtDate(h.day)} <span className="caption">· {h.name}</span>
+              </label>
+            ))}
+            <label className="check">
+              <input type="radio" name="cover-comp" checked={chosen === null} onChange={() => setChosen(null)} />
+              Sin especificar <span className="caption">· usa el más antiguo del saldo</span>
+            </label>
+          </div>
+        </div>
         <p className="caption">Gasta uno del saldo de compensatorios del empleado. Si no le queda saldo, su balance quedará en negativo.</p>
       </div>
       {error && <div className="alert" style={{ marginTop: 16 }}>{error}</div>}
@@ -1598,7 +1616,7 @@ function CoverWithCompensatory({ row, onClose, onDone }: { row: DayRow; onClose:
         <button className="btn ghost" onClick={onClose} disabled={busy}>
           Cancelar
         </button>
-        <button className="btn" onClick={confirm} disabled={busy}>
+        <button className="btn" onClick={confirm} disabled={busy || !comp.data}>
           {busy ? "Guardando…" : "Cubrir con compensatorio"}
         </button>
       </div>

@@ -18,7 +18,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Employee, Holiday, HolidayWorker, Punch, ShiftDayOff
+from app.models import Employee, Holiday, HolidayWorker, ManualCompensatory, Punch, ShiftDayOff
 
 # Las marcaciones del sistema empiezan con el asueto del 15 de septiembre de 2026. Los asuetos
 # anteriores del mismo año cuentan solo para quien RRHH anote que los trabajó; los de años
@@ -160,13 +160,19 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
         ):
             notes.setdefault(emp_id, []).append(note)
 
+    # Compensatorios manuales («Otro»): concedidos a mano por RRHH, cuentan como ganados.
+    manual: dict[int, list[ManualCompensatory]] = {}
+    if ids:
+        for m in db.scalars(select(ManualCompensatory).where(ManualCompensatory.employee_id.in_(ids))):
+            manual.setdefault(m.employee_id, []).append(m)
+
     out = []
     for e in employees:
         s = CompensatoryStatus(e.id, taken=sum(used(n) for n in notes.get(e.id, [])))
         for h in every:
             if h.day < START:
-                # Antes del 15-09-2026 no hay marcaciones: si RRHH anotó que lo trabajó, el asueto
-                # se MUESTRA en su lista (earned), pero no cuenta para el saldo (ver balance).
+                # Antes del 15-09-2026 no hay marcaciones: si RRHH anotó que lo trabajó, cuenta como
+                # ganado (en la UI sale en gris por ser previo al corte).
                 if (e.id, h.id) in worked_before:
                     s.earned.append(h)
                 continue
@@ -176,6 +182,12 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
                 s.earned.append(h)
             elif h.day in days_with_data:
                 s.lost.append(h)
+        # «Otro»: cada compensatorio manual se representa como un ganado más (id negativo para no
+        # chocar con los asuetos reales; la fecha es su día de origen y el nombre, su nota).
+        for m in manual.get(e.id, []):
+            h = Holiday(day=m.earned_date, name=m.note or "Otro")
+            h.id = -m.id
+            s.earned.append(h)
         # Disponibles = ganados sin usar, incluidos los anteriores al 15/09 (salen en gris en la UI).
         s.available = unused(s.earned, notes.get(e.id, []))
         out.append(s)

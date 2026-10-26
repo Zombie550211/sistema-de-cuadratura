@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, Staff
 from app.core.config import get_settings
-from app.models import Employee, EmployeeStatus, Holiday, HolidayWorker, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
+from app.models import Employee, EmployeeStatus, Holiday, HolidayWorker, ManualCompensatory, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
 from app.schemas import (
     BulkAssignIn,
     BulkAssignOut,
@@ -20,6 +20,8 @@ from app.schemas import (
     LeaveBulkOut,
     ShiftDayOffIn,
     ShiftDayOffOut,
+    ManualCompensatoryIn,
+    ManualCompensatoryOut,
     ShiftDayOffUpdateIn,
     ShiftTemplateIn,
     ShiftTemplateOut,
@@ -399,6 +401,36 @@ def list_compensatory(db: DB, _: Staff, area: Annotated[str | None, Query(max_le
         CompensatoryStatusOut(employee_id=s.employee_id, earned=s.earned, lost=s.lost, taken=s.taken, available=s.available, balance=s.balance)
         for s in compensatory_status(db, _active_employees(db, area), today)
     ]
+
+
+@router.post("/manual-compensatories", response_model=ManualCompensatoryOut, status_code=status.HTTP_201_CREATED)
+def grant_manual_compensatory(data: ManualCompensatoryIn, db: DB, user: HR):
+    """«Otro»: concede a mano un compensatorio ganado (suma al saldo y queda disponible para gastarse)."""
+    if db.get(Employee, data.employee_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
+    m = ManualCompensatory(
+        employee_id=data.employee_id,
+        earned_date=data.earned_date,
+        note=(data.note or "").strip() or None,
+        created_by_id=user.id,
+    )
+    db.add(m)
+    db.flush()
+    audit.record(db, user, "otro", "manual_compensatory", m.id, {"empleado": data.employee_id, "origen": data.earned_date.isoformat(), "nota": m.note})
+    db.commit()
+    db.refresh(m)
+    return m
+
+
+@router.delete("/manual-compensatories/{manual_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_manual_compensatory(manual_id: int, db: DB, user: HR):
+    """Quita un compensatorio manual («Otro»)."""
+    m = db.get(ManualCompensatory, manual_id)
+    if m is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Compensatorio no encontrado")
+    audit.record(db, user, "eliminar", "manual_compensatory", m.id, {"empleado": m.employee_id})
+    db.delete(m)
+    db.commit()
 
 
 @router.post("/days-off", response_model=ShiftDayOffOut, status_code=status.HTTP_201_CREATED)

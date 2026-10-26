@@ -121,6 +121,20 @@ class LatenessWaiver(Base):
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
+class ManualCompensatory(Base):
+    """Compensatorio concedido a mano por RRHH («Otro»), sin asueto registrado: cuenta como un
+    compensatorio ganado más y queda disponible para gastarse igual que los demás. earned_date es
+    el día de donde salió y note explica de dónde salió."""
+
+    __tablename__ = "manual_compensatories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    earned_date: Mapped[date] = mapped_column(Date, index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
 class PayrollMark(Base):
     """Empleado ya agregado a planilla («cuadrado») en un periodo. La fila existe = marcado como
     «ya agregado a planilla» para el periodo que empieza en period_start (la quincena o el corte

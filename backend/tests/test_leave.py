@@ -142,6 +142,34 @@ def test_holiday_before_cutoff_counts_and_is_available(login):
     assert status[other["id"]]["earned"] == [] and status[other["id"]]["lost"] == []
 
 
+def test_manual_compensatory_otro(login):
+    """«Otro»: RRHH concede un compensatorio manual; cuenta como ganado y queda disponible."""
+    hr = login("rrhh")
+    emp = _employee(hr, code="E-070", first_name="Ana", hire_date="2020-01-01")
+
+    r = hr.post("/api/schedules/manual-compensatories", json={"employee_id": emp["id"], "earned_date": "2026-07-20", "note": "Cubrió turno extra"})
+    assert r.status_code == 201, r.text
+    mid = r.json()["id"]
+
+    status = next(s for s in hr.get("/api/schedules/compensatory").json() if s["employee_id"] == emp["id"])
+    assert status["balance"] == 1
+    # Queda disponible, con su día de origen y su nota como nombre.
+    assert [(h["day"], h["name"]) for h in status["available"]] == [("2026-07-20", "Cubrió turno extra")]
+
+    # Se puede gastar como cualquier otro (la nota lleva su fecha de origen).
+    assert hr.post("/api/schedules/days-off", json={
+        "employee_id": emp["id"], "work_date": "2026-10-28", "kind": "compensatorio",
+        "notes": "Compensatorio 20/07/2026 (Cubrió turno extra)",
+    }).status_code == 201
+    status = next(s for s in hr.get("/api/schedules/compensatory").json() if s["employee_id"] == emp["id"])
+    assert (status["taken"], status["balance"], status["available"]) == (1, 0, [])
+
+    # Revocar el manual: el saldo baja.
+    assert hr.delete(f"/api/schedules/manual-compensatories/{mid}").status_code == 204
+    status = next(s for s in hr.get("/api/schedules/compensatory").json() if s["employee_id"] == emp["id"])
+    assert status["balance"] == -1  # ya no hay ganado, pero el día tomado sigue
+
+
 def test_one_day_can_use_two_compensatories(client, login, db):
     from datetime import datetime
 
