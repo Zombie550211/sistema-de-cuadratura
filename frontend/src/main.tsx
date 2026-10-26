@@ -19,6 +19,7 @@ import { EmployeeProfile, EmployeeProfilePage } from "./pages/EmployeeProfile";
 import { GoogleAdsReceipts } from "./pages/GoogleAdsReceipts";
 import { Employees } from "./pages/Employees";
 import { Integrations } from "./pages/Integrations";
+import { PassiveEmployees } from "./pages/PassiveEmployees";
 import { Login } from "./pages/Login";
 import { Leave } from "./pages/Leave";
 import { Punches } from "./pages/Punches";
@@ -99,6 +100,7 @@ function App() {
         {["horarios", "vacaciones", "compensatorios", "empleados"].map((base) => (
           <Route key={`${base}-sup`} path={`${base}/supervisores`} element={<Navigate to={`/${base}/agentes`} replace />} />
         ))}
+        <Route path="empleados-pasivos" element={<Guard roles={STAFF}><PassiveEmployees /></Guard>} />
         <Route path="empleados/:id" element={<Guard roles={STAFF}><EmployeeProfilePage /></Guard>} />
         <Route path="recibos-google" element={<Guard roles={STAFF}><GoogleAdsReceipts /></Guard>} />
         <Route path="integraciones" element={<Guard roles={["admin", "rrhh"]}><Integrations /></Guard>} />

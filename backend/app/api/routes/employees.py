@@ -228,6 +228,11 @@ def update_employee(employee_id: int, data: EmployeeUpdate, db: DB, user: HR):
     changes = {}
     values = data.model_dump()
     values.pop("code", None)  # el código ya no se usa: no se cambia
+    # Al dar de baja (inactivo) se elimina el ID de marcación y las huellas: el empleado queda
+    # solo con el código del sistema y el número de reloj queda libre para otra persona.
+    if values.get("status") == EmployeeStatus.inactivo:
+        values["badge_number"] = None
+        values["fingerprints"] = {}
     if values["area"] is None:
         values["area"] = area_for(data.position, data.crm_agent_id) if data.position != employee.position else employee.area
     for field, value in values.items():

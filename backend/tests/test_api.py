@@ -107,6 +107,28 @@ def test_assigning_badge_links_existing_punches(login):
     assert len(client.get("/api/attendance/unmapped-badges").json()) == 2
 
 
+def test_baja_clears_badge_and_fingerprints(login):
+    """Dar de baja (inactivo) elimina el ID de marcación y las huellas; queda solo el código."""
+    client = login("rrhh")
+    emp = _employee(client, code="E-050", first_name="Eva", badge_number="77", fingerprints={"LA17": "77"})
+    assert emp["badge_number"] == "77" and emp["fingerprints"] == {"LA17": "77"}
+
+    r = client.put(f"/api/employees/{emp['id']}", json={**emp, "status": "inactivo"})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["status"] == "inactivo"
+    assert out["badge_number"] is None and out["fingerprints"] == {}
+    assert out["code"] == emp["code"]  # conserva el código del sistema
+
+    # el ID del reloj queda libre para otra persona
+    r2 = client.post("/api/employees", json={"code": "E-051", "first_name": "Otro", "last_name": "Nuevo", "badge_number": "77"})
+    assert r2.status_code == 201, r2.text
+
+    # aparece en el listado de inactivos (empleados pasivos)
+    passive = client.get("/api/employees", params={"status": "inactivo"}).json()
+    assert emp["id"] in [e["id"] for e in passive["items"]]
+
+
 def test_duplicate_badge_is_rejected(login):
     client = login("rrhh")
     _employee(client, badge_number="5")

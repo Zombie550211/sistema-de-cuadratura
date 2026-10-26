@@ -4,7 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { AREAS, type Role } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { ROLE_LABEL } from "../lib/format";
-import { IconCalendar, IconChevronDown, IconChevronLeft, IconClock, IconFile, IconHome, IconLink, IconLogout, IconRepeat, IconShield, IconSun, IconUsers } from "./Icons";
+import { IconCalendar, IconChevronDown, IconChevronLeft, IconClock, IconFile, IconHome, IconLink, IconLogout, IconRepeat, IconShield, IconSun, IconUsers, IconUserTie } from "./Icons";
 
 interface NavItem {
   to: string;
@@ -28,6 +28,7 @@ const SECTIONS: { title: string; links: NavItem[] }[] = [
     title: "Personal",
     links: [
       { to: "/empleados", label: "Empleados", icon: IconUsers, roles: ["admin", "rrhh"], areas: true },
+      { to: "/empleados-pasivos", label: "Empleados pasivos", icon: IconUserTie, roles: ["admin", "rrhh"] },
       { to: "/vacaciones", label: "Días de vacación", icon: IconSun, roles: ["admin", "rrhh"], areas: true },
       { to: "/compensatorios", label: "Días compensatorio", icon: IconRepeat, roles: ["admin", "rrhh"], areas: true },
     ],
