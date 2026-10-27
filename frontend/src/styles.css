@@ -280,6 +280,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .punch.double { border-style: dashed; border-color: var(--line-strong); color: var(--muted-2); text-decoration: line-through; }
 .punch.in::before { content: "ENTRADA"; margin-right: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--accent-bright); }
+.punch.out { border-color: var(--warn); }
+.punch.out::before { content: "SALIDA"; margin-right: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--warn); }
 .punch.middle { border-style: dashed; border-color: var(--line-strong); color: var(--muted-2); }
 .punch-list { display: flex; flex-wrap: wrap; gap: 6px; }
 

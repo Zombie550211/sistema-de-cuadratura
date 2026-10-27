@@ -38,9 +38,11 @@ interface DayRow {
   name: string | null;
   code: string | null;
   punches: Punch[];
-  /** Regla de RRHH: solo cuenta la primera marca válida del día (la entrada). */
+  /** Regla de RRHH: del día solo valen dos marcas, la primera (entrada) y la última (salida). */
   checkIn: Punch | null;
-  /** Marcas válidas después de la entrada: el agente salió y volvió, no cuentan. */
+  /** La última marca válida del día. Null si solo hubo una (esa vale como entrada, sin salida). */
+  checkOut: Punch | null;
+  /** Marcas válidas entre la entrada y la salida: el agente salió y volvió, no cuentan. */
   ignored: number;
 }
 
@@ -59,7 +61,12 @@ type Dialog = { kind: "edit" | "delete" | "link" | "compensatorio"; row: DayRow 
 
 function entry(punches: Punch[]) {
   const valid = punches.filter((p) => !p.is_double_tap);
-  return { checkIn: valid[0] ?? null, ignored: Math.max(valid.length - 1, 0) };
+  // Del día valen la primera (entrada) y la última (salida). Con una sola marca, es solo entrada.
+  return {
+    checkIn: valid[0] ?? null,
+    checkOut: valid.length > 1 ? valid[valid.length - 1] : null,
+    ignored: Math.max(valid.length - 2, 0),
+  };
 }
 
 /** Agrupa las marcas por persona (empleado, o huella sin empleado) y, dentro, por día. */
@@ -79,6 +86,7 @@ function groupPeople(items: Punch[]): PersonRow[] {
         code: p.employee?.code ?? null,
         punches: [],
         checkIn: null,
+        checkOut: null,
         ignored: 0,
       });
     }
@@ -110,7 +118,8 @@ function punchRole(r: DayRow, p: Punch): { cls: string; title: string } {
   const cls = p.original_punched_at ? " edited" : "";
   if (p.is_double_tap) return { cls: " double" + cls, title: "Doble marca (ignorada)" + edited };
   if (p.id === r.checkIn?.id) return { cls: " in" + cls, title: "Entrada" + edited };
-  return { cls: " middle" + cls, title: "No cuenta: solo vale la primera marca del día" + edited };
+  if (p.id === r.checkOut?.id) return { cls: " out" + cls, title: "Salida" + edited };
+  return { cls: " middle" + cls, title: "No cuenta: solo valen la primera (entrada) y la última (salida) del día" + edited };
 }
 
 /** Marcaciones de todos los empleados, con una pestaña por local: una fila por persona y, al
@@ -763,6 +772,7 @@ function PersonQuincena({
       code: person.code,
       punches: [],
       checkIn: null,
+      checkOut: null,
       ignored: 0,
     };
     const list: RowAction[] = [{ label: "Editar", onClick: () => onAction({ kind: "edit", row }) }];
@@ -864,7 +874,7 @@ function PersonQuincena({
                         </div>
                         {r.ignored > 0 && (
                           <div className="caption">
-                            +{r.ignored} marca{r.ignored === 1 ? "" : "s"} después de la entrada (no cuenta{r.ignored === 1 ? "" : "n"})
+                            +{r.ignored} marca{r.ignored === 1 ? "" : "s"} entre la entrada y la salida (no cuenta{r.ignored === 1 ? "" : "n"})
                           </div>
                         )}
                         {flag === "descanso" && (
