@@ -123,7 +123,10 @@ DATETIME_HEADERS = {
 }
 DATE_HEADERS = {"FECHA", "DATE", "DIA"}
 TIME_HEADERS = {"HORA", "TIME", "HORA DE ENTRADA", "ENTRADA"}
-NAME_HEADERS = {"NOMBRE", "NAME", "EMPLEADO", "NOMBRE COMPLETO", "NOMBRES", "AGENTE", "FULL NAME"}
+NAME_HEADERS = {
+    "NOMBRE", "NAME", "EMPLEADO", "EMPLEADOS", "NOMBRE COMPLETO", "NOMBRES", "NOMBRE DEL EMPLEADO",
+    "NOMBRE Y APELLIDO", "NOMBRES Y APELLIDOS", "AGENTE", "PERSONAL", "FULL NAME", "EMPLOYEE", "EMPLOYEE NAME",
+}
 
 DATETIME_FORMATS = (
     "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M",
@@ -182,6 +185,23 @@ def _as_time(value) -> time | None:
             except ValueError:
                 continue
     return None
+
+
+_JUNK_NAMES = {"#N/A", "N/A", "NA", "-", "--", "#REF!", "#VALUE!", "#NAME?", "#ERROR", "0", "NULL", "NONE"}
+
+
+def _valid_name(value) -> str | None:
+    """Nombre utilizable de la celda, o None. Descarta la basura típica de fórmulas sin resolver
+    (#N/A, #REF!, N/A, -, …) y lo que no tenga ninguna letra, para que un nombre real en otra fila
+    del mismo número no quede tapado por una celda rota."""
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    if not text or text.upper().replace(" ", "") in _JUNK_NAMES or text.startswith("#"):
+        return None
+    if not re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", text):
+        return None
+    return text
 
 
 def _badge(value) -> str | None:
@@ -255,8 +275,8 @@ def _parse_sheet(rows, cols, start, tz, result: ParseResult, names: dict[str, st
             result.errors.append((line_no, "Fila sin ID de reloj o sin fecha y hora válidas"))
             continue
         at = at.replace(tzinfo=tz)
-        name = cell(row, cols["name"])
-        if name and isinstance(name, str) and badge not in names:
+        name = _valid_name(cell(row, cols["name"]))
+        if name and badge not in names:
             names[badge] = name
         if (badge, at) in seen:
             result.duplicate_lines += 1

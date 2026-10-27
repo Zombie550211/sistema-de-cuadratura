@@ -90,9 +90,14 @@ def detect_local(db: Session, badges: set[str], names: dict[str, str] | None = N
     return best
 
 
-def link_unmapped_punches(db: Session) -> int:
+def link_unmapped_punches(db: Session, skip: set[tuple[int, str]] | None = None) -> int:
     """Pone nombre a las marcas sin empleado: por la huella del local del reloj (planilla) y, si
-    no, por el ID de reloj del empleado. Se llama tras importar y al crear o editar empleados."""
+    no, por el ID de reloj del empleado. Se llama tras importar y al crear o editar empleados.
+
+    `skip` son pares (reloj, número) que NO se enganchan por huella: se usa para las marcas cuyo
+    número en el archivo venía con nombre pero el nombre no cuadró con ninguna ficha, para no
+    colgarlas de la huella de otra persona (misma regla: el nombre manda)."""
+    skip = skip or set()
     local_of = dict(db.execute(select(Device.id, Device.fingerprint_key)).tuples().all())
     by_badge: dict[str, int] = {}
     by_local: dict[str, dict[str, int]] = {}
@@ -105,6 +110,8 @@ def link_unmapped_punches(db: Session) -> int:
     targets: dict[int, list[int]] = {}
     rows = db.execute(select(Punch.id, Punch.device_id, Punch.badge).where(Punch.employee_id.is_(None))).all()
     for punch_id, device_id, badge in rows:
+        if (device_id, badge) in skip:
+            continue
         emp_id = by_local.get(local_of.get(device_id) or "", {}).get(badge) or by_badge.get(badge)
         if emp_id:
             targets.setdefault(emp_id, []).append(punch_id)
@@ -113,35 +120,64 @@ def link_unmapped_punches(db: Session) -> int:
     return sum(len(ids) for ids in targets.values())
 
 
-def _link_by_name(db: Session, device_id: int, names: dict[str, str]) -> None:
-    """Excel con nombres: un ID que sigue sin empleado se vincula si el nombre coincide con una
-    sola ficha; si esa ficha no tiene ID de reloj, se le asigna."""
+def _match_by_name(employees: list[Employee], keys: dict[int, set[str]], wanted: set[str]) -> Employee | None:
+    """Busca la ficha cuyo nombre completo coincide con `wanted` (conjunto de palabras del nombre
+    que trae el archivo). Primero exige las mismas palabras; si no, acepta que a uno le falten o
+    le sobren nombres intermedios (uno es subconjunto del otro) siempre que compartan al menos dos
+    palabras y el resultado sea único. Si hay empate, no se arriesga y devuelve None."""
+    if not wanted:
+        return None
+    exact = [e for e in employees if keys[e.id] == wanted]
+    if exact:
+        return exact[0] if len(exact) == 1 else None
+    partial = [
+        e for e in employees
+        if keys[e.id] and (wanted <= keys[e.id] or keys[e.id] <= wanted) and len(wanted & keys[e.id]) >= 2
+    ]
+    return partial[0] if len(partial) == 1 else None
+
+
+def link_by_name(db: Session, device, names: dict[str, str]) -> set[str]:
+    """Empareja por NOMBRE contra la base de empleados (método principal cuando el archivo trae
+    nombres, robusto al formato). Para cada número con nombre válido: lo vincula a la ficha cuyo
+    nombre coincide y, de paso, aprende la huella de ese local en la ficha (si está libre) para la
+    próxima importación. Devuelve los números cuyo nombre NO cuadró con nadie: esas marcas se
+    dejan sueltas en vez de colgarlas de la huella de otra persona."""
     from app.services.employee_roster import name_key
 
+    unresolved: set[str] = set()
     unmapped = set(
         db.scalars(
-            select(Punch.badge).where(Punch.device_id == device_id, Punch.employee_id.is_(None)).distinct()
+            select(Punch.badge).where(Punch.device_id == device.id, Punch.employee_id.is_(None)).distinct()
         )
     )
     if not unmapped:
-        return
+        return unresolved
+    local = device.fingerprint_key
     employees = db.scalars(select(Employee)).all()
     keys = {e.id: name_key(e.full_name) for e in employees}
-    used = {e.badge_number for e in employees if e.badge_number}
+    # (local, número) ya en uso por otra ficha: no se pisa al aprender la huella.
+    taken: set[tuple[str, str]] = set()
+    for e in employees:
+        for key, value in (e.fingerprints or {}).items():
+            taken.add((key, str(value).strip()))
+
     for badge in unmapped & names.keys():
-        wanted = name_key(names[badge])
-        found = [e for e in employees if wanted and keys[e.id] == wanted]
-        if len(found) != 1:
+        employee = _match_by_name(employees, keys, name_key(names[badge]))
+        if employee is None:
+            unresolved.add(badge)
             continue
-        employee = found[0]
-        if not employee.badge_number and badge not in used:
-            employee.badge_number = badge
-            used.add(badge)
+        if local and str((employee.fingerprints or {}).get(local, "")).strip() != badge and (local, badge) not in taken:
+            fps = dict(employee.fingerprints or {})
+            fps[local] = badge
+            employee.fingerprints = fps
+            taken.add((local, badge))
         db.execute(
             update(Punch)
-            .where(Punch.device_id == device_id, Punch.badge == badge, Punch.employee_id.is_(None))
+            .where(Punch.device_id == device.id, Punch.badge == badge, Punch.employee_id.is_(None))
             .values(employee_id=employee.id)
         )
+    return unresolved
 
 
 def recompute_double_taps(
@@ -288,9 +324,11 @@ def import_attlog(
         for r in new_records
     )
     db.flush()
-    link_unmapped_punches(db)
-    if names:
-        _link_by_name(db, device.id, names)
+    # El nombre manda: primero se empareja por nombre contra la base de empleados. Los números
+    # que traían nombre pero no cuadraron con nadie se dejan sueltos (no se cuelgan de la huella
+    # de otra persona). El resto (números sin nombre en el archivo) se engancha por huella/ID.
+    skip = {(device.id, badge) for badge in link_by_name(db, device, names)} if names else set()
+    link_unmapped_punches(db, skip=skip)
     db.flush()
 
     batch.unknown_badges = db.scalar(

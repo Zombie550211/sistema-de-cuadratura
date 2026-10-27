@@ -224,3 +224,92 @@ def test_search_by_full_name(login):
     assert client.get("/api/employees", params={"q": "Cristhian Lopez"}).json()["total"] == 0
     # El código ya no se usa: no sirve para buscar.
     assert client.get("/api/employees", params={"q": "S-1"}).json()["total"] == 0
+
+
+def _xlsx_punches(rows, sheet="ASISTENCIA LA18", headers=("N ", "EMPLEADOS", "FECHA", "HORA")):
+    """Excel de marcaciones como el del reloj: número, nombre, fecha, hora. `rows` son tuplas
+    (numero, nombre, 'YYYY-MM-DD', 'HH:MM:SS')."""
+    import io
+    from datetime import datetime
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet
+    ws.append(list(headers))
+    for num, nombre, d, t in rows:
+        ws.append([num, nombre, datetime.strptime(d, "%Y-%m-%d"), datetime.strptime(t, "%H:%M:%S").time()])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_import_links_by_name_over_fingerprint_collision(login):
+    """El nombre manda: aunque el número choque entre locales, cada marca va a la persona cuyo
+    nombre coincide; y la huella de ese local se aprende en la ficha."""
+    client = login("rrhh")
+    # Dos personas comparten el número 16 en locales distintos.
+    stephanie = _employee(
+        client, code="A", first_name="Stephanie Yamileth", last_name="Ortiz Fuentes",
+        fingerprints={"LA18": "16"},
+    )
+    jose = _employee(
+        client, code="B", first_name="Jose Carmen", last_name="Rodriguez",
+        fingerprints={"LA17": "16"},
+    )
+    # Archivo de LA18: el 16 es Stephanie; el 9, Karla, que aún no tiene huella (se aprende por nombre).
+    karla = _employee(client, code="C", first_name="Karla Guadalupe", last_name="Rodriguez Perez")
+    content = _xlsx_punches([
+        (16, "STEPHANIE YAMILETH ORTIZ FUENTES", "2026-10-14", "07:57:16"),
+        (16, "STEPHANIE YAMILETH ORTIZ FUENTES", "2026-10-14", "17:05:00"),
+        (9, "KARLA GUADALUPE RODRIGUEZ PEREZ", "2026-10-14", "07:39:41"),
+    ])
+    r = client.post("/api/attendance/imports",
+                    files={"file": ("ASISTENCIA LA18.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                    data={"local": "LA18"})
+    assert r.status_code == 201, r.text
+
+    def count(emp):
+        return client.get("/api/attendance/punches",
+                          params={"date_from": "2026-10-14", "date_to": "2026-10-14", "employee_id": emp["id"]}).json()["total"]
+
+    assert count(stephanie) == 2   # el 16 de LA18 es Stephanie, no Jose (que tiene el 16 en LA17)
+    assert count(jose) == 0
+    assert count(karla) == 1       # ligada por nombre aunque no tenía huella
+    # se aprendió la huella de LA18 para Karla
+    assert client.get(f"/api/employees/{karla['id']}").json()["fingerprints"].get("LA18") == "9"
+
+
+def test_import_name_not_found_stays_unmapped(login):
+    """Si el número trae nombre en el archivo pero ese nombre no existe en la base, la marca se deja
+    suelta: no se cuelga de la huella de otra persona que tenga ese mismo número."""
+    client = login("rrhh")
+    otro = _employee(client, code="A", first_name="Otra", last_name="Persona", fingerprints={"LA18": "20"})
+    content = _xlsx_punches([
+        (20, "XAVIER ALEXIS BALTAZAR DIAZ", "2026-10-14", "08:00:00"),
+    ])
+    r = client.post("/api/attendance/imports",
+                    files={"file": ("ASISTENCIA LA18.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                    data={"local": "LA18"})
+    assert r.status_code == 201, r.text
+    # no se le colgó a "otro" (que tiene la huella 20 en LA18)
+    assert client.get("/api/attendance/punches",
+                      params={"date_from": "2026-10-14", "date_to": "2026-10-14", "employee_id": otro["id"]}).json()["total"] == 0
+    # queda como huella desconocida
+    assert "20" in {b["badge"] for b in client.get("/api/attendance/unmapped-badges").json()}
+
+
+def test_import_ignores_broken_name_cells(login):
+    """Una celda de nombre rota (#N/A) no debe tapar el nombre real del mismo número en otra fila."""
+    client = login("rrhh")
+    emp = _employee(client, code="A", first_name="Alcyr Steven", last_name="Zavala Molina")
+    content = _xlsx_punches([
+        (81, "#N/A", "2026-10-14", "07:00:00"),
+        (81, "ALCYR STEVEN ZAVALA MOLINA", "2026-10-14", "17:00:00"),
+    ], sheet="ASISTENCIA LA17")
+    r = client.post("/api/attendance/imports",
+                    files={"file": ("ASISTENCIA LA17.xlsx", content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                    data={"local": "LA17"})
+    assert r.status_code == 201, r.text
+    assert client.get("/api/attendance/punches",
+                      params={"date_from": "2026-10-14", "date_to": "2026-10-14", "employee_id": emp["id"]}).json()["total"] == 2
