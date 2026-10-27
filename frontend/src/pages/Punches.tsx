@@ -673,10 +673,12 @@ function PersonQuincena({
       api.get<Page<Punch>>("/attendance/punches", {
         date_from: from,
         date_to: to,
-        // Con empleado, se traen sus marcas de TODOS los relojes (marca con huellas distintas en
-        // cada uno): si no, los días que marcó en otro reloj saldrían como falta. Una huella sin
-        // empleado sí se limita a su reloj, porque el mismo número existe en varios.
-        ...(person.employeeId ? { employee_id: person.employeeId } : { device_id: deviceId, badge: person.badge }),
+        // Se muestran solo las marcas del local abierto (el que seleccionó RRHH): si se traían las
+        // de todos los relojes, una persona enrolada en varios locales (misma persona, huella
+        // distinta en cada uno) mezclaba marcas de otro local y la entrada del día se tomaba mal.
+        // Las faltas NO dependen de esto: se deciden con las llegadas tarde (que miran todos los
+        // relojes), así marcar en otro local no genera una falta falsa aquí.
+        ...(person.employeeId ? { employee_id: person.employeeId, device_id: deviceId } : { device_id: deviceId, badge: person.badge }),
         include_double_taps: showDoubles,
         limit: 10000,
       }),
@@ -737,10 +739,13 @@ function PersonQuincena({
   function check(date: string): "falta" | "descanso" | null {
     if (!hasSchedule) return null;
     const off = offByDate.get(date);
+    // Presente = marcó en este local, o las llegadas tarde (que miran todos los relojes) traen su
+    // entrada ese día: así, si marcó en otro local, no sale falta aunque aquí no se vea la marca.
+    const present = byDate.has(date) || !!lateByKey.get(`${person.employeeId}|${date}`)?.check_in;
     // «No se presentó» en Horarios es falta, aunque el día no tenga turno.
-    if (off && isNoShow(off) && !byDate.has(date)) return "falta";
+    if (off && isNoShow(off) && !present) return "falta";
     if (swapFrom.has(date) || swapTo.has(date)) return null;
-    if (byDate.has(date)) return off && !isNoShow(off) ? "descanso" : null;
+    if (present) return off && !isNoShow(off) ? "descanso" : null;
     return shiftByDate.has(date) && date < today() ? "falta" : null;
   }
   const faltas = dates.filter((d) => check(d) === "falta").length;
