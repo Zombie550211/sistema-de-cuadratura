@@ -23,6 +23,7 @@ from app.schemas import (
     LocalesOut,
     LocalOut,
     Page,
+    PresenceIn,
     PunchEdit,
     PunchOut,
     UnmappedBadge,
@@ -363,6 +364,56 @@ def delete_punch(punch_id: int, db: DB, user: HR):
         {"id_reloj": punch.badge, "hora": punch.punched_at.isoformat(), "empleado_id": punch.employee_id},
     )
     db.commit()
+
+
+@router.post("/attendance/presence", response_model=list[PunchOut], status_code=201)
+def mark_present(data: PresenceIn, db: DB, user: HR):
+    """«Sí se presentó»: el reloj no tiene marcas del día, pero la persona trabajó. Se crean la
+    entrada y la salida con la hora del horario, así salen las horas laboradas del turno."""
+    device = db.get(Device, data.device_id)
+    if device is None or db.get(Employee, data.employee_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Reloj o empleado no encontrado")
+    shift = db.scalar(
+        select(ShiftAssignment).where(
+            ShiftAssignment.employee_id == data.employee_id, ShiftAssignment.work_date == data.date
+        )
+    )
+    if shift is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Ese día no tiene horario: póngale uno primero")
+    badge = normalize_badge(data.badge)
+    start, end = _day_bounds(data.date, data.date)
+    marked = db.scalar(
+        select(func.count()).where(
+            ACTIVE, Punch.employee_id == data.employee_id, Punch.punched_at >= start, Punch.punched_at < end
+        )
+    )
+    if marked:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Ese día ya tiene marcas")
+
+    created = []
+    for at in (shift.start_at, shift.end_at):
+        # Una marca eliminada a esa misma hora ocupa el lugar (no se borra de verdad): se recupera.
+        punch = db.scalar(
+            select(Punch).where(Punch.device_id == device.id, Punch.badge == badge, Punch.punched_at == at)
+        )
+        if punch is None:
+            punch = Punch(device_id=device.id, badge=badge, punched_at=at, added_by_id=user.id)
+            db.add(punch)
+        punch.employee_id = data.employee_id
+        punch.deleted_at = None
+        punch.deleted_by_id = None
+        created.append(punch)
+    db.flush()
+    recompute_double_taps(db, device.id, {badge}, shift.start_at, shift.end_at)
+    audit.record(
+        db, user, "presente", "punch", created[0].id,
+        {"id_reloj": badge, "empleado_id": data.employee_id, "fecha": data.date.isoformat(),
+         "entrada": shift.start_at.isoformat(), "salida": shift.end_at.isoformat()},
+    )
+    db.commit()
+    for p in created:
+        db.refresh(p)
+    return created
 
 
 @router.post("/attendance/badges/link", status_code=204)

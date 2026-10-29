@@ -81,7 +81,9 @@ class Punch(Base):
     work_code: Mapped[int] = mapped_column(Integer, default=0)
     # True si es una repetición dentro de la ventana de doble marca de otra marca previa.
     is_double_tap: Mapped[bool] = mapped_column(Boolean, default=False)
-    import_batch_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id"), index=True)
+    # Null en las marcas «Sí se presentó»: RRHH las crea con el horario, no vienen del reloj.
+    import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"), index=True)
+    added_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     # Hora que trajo el reloj, si RRHH la corrigió.
     original_punched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     edited_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
@@ -89,3 +91,7 @@ class Punch(Base):
     deleted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
     employee = relationship("Employee", lazy="joined")
+
+    @property
+    def manual(self) -> bool:
+        return self.import_batch_id is None

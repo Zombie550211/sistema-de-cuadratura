@@ -497,6 +497,15 @@ class PunchEdit(BaseModel):
     punched_at: datetime
 
 
+class PresenceIn(BaseModel):
+    """«Sí se presentó»: el día no tiene marcas en el reloj, se ponen las del horario."""
+
+    employee_id: int
+    date: date
+    device_id: int
+    badge: str = Field(min_length=1, max_length=32)
+
+
 class BadgeLinkIn(BaseModel):
     device_id: int
     badge: str = Field(min_length=1, max_length=32)
@@ -553,6 +562,7 @@ class PunchOut(ORM):
     verify_mode: int
     work_code: int
     is_double_tap: bool
+    manual: bool = False
     employee: EmployeeBrief | None
 
 

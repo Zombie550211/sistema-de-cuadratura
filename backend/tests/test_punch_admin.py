@@ -185,3 +185,33 @@ def test_saved_cut_dates_history(login):
     assert client.delete("/api/attendance/cut-dates", params=b).status_code == 204
     assert client.get("/api/attendance/cut-dates").json() == [a]
     assert client.get("/api/attendance/cut-date").json() is None
+
+
+def test_mark_present_creates_punches_from_shift(login):
+    client = login("rrhh")
+    _upload(client)
+    device = client.get("/api/attendance/locales").json()["devices"][0]
+    emp = _employee(client, badge_number="90")
+    body = {"employee_id": emp["id"], "date": "2026-09-30", "device_id": device["id"], "badge": "90"}
+
+    # Sin horario no hay de dónde sacar las horas.
+    assert client.post("/api/attendance/presence", json=body).status_code == 400
+
+    client.post("/api/schedules/assignments/bulk", json={
+        "employee_ids": [emp["id"]], "date_from": "2026-09-30", "date_to": "2026-09-30",
+        "start_time": "08:00", "end_time": "17:00",
+    })
+    r = client.post("/api/attendance/presence", json=body)
+    assert r.status_code == 201, r.text
+    assert [(p["punched_at"][11:16], p["manual"]) for p in r.json()] == [("08:00", True), ("17:00", True)]
+
+    day = _punches(client, date_from="2026-09-30", date_to="2026-09-30", badge="90")
+    assert len(day) == 2 and all(p["employee"]["id"] == emp["id"] for p in day)
+    # Dos veces no: el día ya tiene marcas.
+    assert client.post("/api/attendance/presence", json=body).status_code == 409
+
+    # Se puede deshacer eliminando las marcas, y volver a marcar recupera las mismas.
+    for p in day:
+        assert client.delete(f"/api/attendance/punches/{p['id']}").status_code == 204
+    assert client.post("/api/attendance/presence", json=body).status_code == 201
+    assert len(_punches(client, date_from="2026-09-30", date_to="2026-09-30", badge="90")) == 2
