@@ -215,3 +215,9 @@ def test_mark_present_creates_punches_from_shift(login):
         assert client.delete(f"/api/attendance/punches/{p['id']}").status_code == 204
     assert client.post("/api/attendance/presence", json=body).status_code == 201
     assert len(_punches(client, date_from="2026-09-30", date_to="2026-09-30", badge="90")) == 2
+
+    # «Repuso horario» hace lo mismo y deja el motivo en la marca.
+    for p in _punches(client, date_from="2026-09-30", date_to="2026-09-30", badge="90"):
+        client.delete(f"/api/attendance/punches/{p['id']}")
+    r = client.post("/api/attendance/presence", json={**body, "reason": "repuso"})
+    assert r.status_code == 201 and {p["manual_reason"] for p in r.json()} == {"repuso"}

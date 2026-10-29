@@ -201,8 +201,9 @@ export interface Punch {
   verify_mode: number;
   work_code: number;
   is_double_tap: boolean;
-  /** Marca puesta por RRHH con «Sí se presentó» (horas del horario, no del reloj). */
+  /** Marca puesta por RRHH con «Sí se presentó» o «Repuso horario» (horas del horario, no del reloj). */
   manual: boolean;
+  manual_reason: "presente" | "repuso" | null;
   employee: EmployeeBrief | null;
 }
 

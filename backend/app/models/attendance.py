@@ -84,6 +84,8 @@ class Punch(Base):
     # Null en las marcas «Sí se presentó»: RRHH las crea con el horario, no vienen del reloj.
     import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id"), index=True)
     added_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # Motivo de la marca manual: 'presente' («Sí se presentó») o 'repuso' («Repuso horario»).
+    manual_reason: Mapped[str | None] = mapped_column(String(16))
     # Hora que trajo el reloj, si RRHH la corrigió.
     original_punched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     edited_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))

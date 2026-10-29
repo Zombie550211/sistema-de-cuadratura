@@ -113,9 +113,12 @@ function groupPeople(items: Punch[]): PersonRow[] {
   return list;
 }
 
+/** Motivo de una marca puesta por RRHH con la hora del horario. */
+const manualLabel = (p: Punch) => (p.manual_reason === "repuso" ? "Repuso horario" : "Sí se presentó");
+
 function punchRole(r: DayRow, p: Punch): { cls: string; title: string } {
   const edited = p.manual
-    ? " · «Sí se presentó»: hora del horario, el reloj no la tiene"
+    ? ` · «${manualLabel(p)}»: hora del horario, el reloj no la tiene`
     : p.original_punched_at ? ` · corregida (el reloj marcó ${fmtTimeSec(p.original_punched_at)})` : "";
   const cls = p.original_punched_at || p.manual ? " edited" : "";
   if (p.is_double_tap) return { cls: " double" + cls, title: "Doble marca (ignorada)" + edited };
@@ -1322,8 +1325,9 @@ function EditDay({ row, onChanged, onDone }: { row: DayRow; onChanged: () => voi
   );
 }
 
-/** Día sin marcas en el reloj pero la persona sí trabajó: se le ponen la entrada y la salida con
- *  la hora de su horario, así salen las horas laboradas del turno. Se deshace eliminando las marcas. */
+/** Día sin marcas en el reloj pero la persona sí trabajó («Sí se presentó») o repuso el turno
+ *  («Repuso horario»): se le ponen la entrada y la salida con la hora de su horario, así salen las
+ *  horas laboradas del turno. El motivo queda en la marca. Se deshace eliminando las marcas. */
 function MarkPresent({
   row,
   employeeId,
@@ -1337,18 +1341,18 @@ function MarkPresent({
   loading: boolean;
   onDone: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"presente" | "repuso" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function mark() {
-    setBusy(true);
+  async function mark(reason: "presente" | "repuso") {
+    setBusy(reason);
     setError(null);
     try {
-      await api.post("/attendance/presence", { employee_id: employeeId, date: row.date, device_id: row.deviceId, badge: row.badge });
+      await api.post("/attendance/presence", { employee_id: employeeId, date: row.date, device_id: row.deviceId, badge: row.badge, reason });
       onDone();
     } catch (err) {
       setError((err as ApiError).message);
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -1359,11 +1363,14 @@ function MarkPresent({
           {loading
             ? "Este día no tiene marcas."
             : shift
-              ? `Este día no tiene marcas. Si la persona trabajó, se le pone entrada ${fmtTime(shift.start_at)} y salida ${fmtTime(shift.end_at)}, las de su horario.`
-              : "Este día no tiene marcas. Para marcar que se presentó, primero póngale horario."}
+              ? `Este día no tiene marcas. Si la persona trabajó o repuso el turno, se le pone entrada ${fmtTime(shift.start_at)} y salida ${fmtTime(shift.end_at)}, las de su horario.`
+              : "Este día no tiene marcas. Para marcar que se presentó o repuso, primero póngale horario."}
         </span>
-        <button className="btn sm" disabled={!shift || busy || loading} onClick={mark}>
-          {busy ? "Guardando…" : "Sí se presentó"}
+        <button className="btn sm" disabled={!shift || !!busy || loading} onClick={() => mark("presente")}>
+          {busy === "presente" ? "Guardando…" : "Sí se presentó"}
+        </button>
+        <button className="btn sm" disabled={!shift || !!busy || loading} onClick={() => mark("repuso")}>
+          {busy === "repuso" ? "Guardando…" : "Repuso horario"}
         </button>
       </div>
       {error && <div className="alert">{error}</div>}
@@ -1581,7 +1588,7 @@ function DayPunchEditor({ row, onChanged }: { row: DayRow; onChanged: () => void
             />
             <span className="caption" style={{ flex: 1 }}>
               {p.is_double_tap ? "Doble marca" : p.id === firstValid ? "Entrada" : "No cuenta"}
-              {p.manual ? " · «Sí se presentó» (hora del horario)" : p.original_punched_at && ` · el reloj marcó ${fmtTimeSec(p.original_punched_at)}`}
+              {p.manual ? ` · «${manualLabel(p)}» (hora del horario)` : p.original_punched_at && ` · el reloj marcó ${fmtTimeSec(p.original_punched_at)}`}
             </span>
             <button className="btn sm" disabled={!dirty || busy !== null} onClick={() => save(p)}>
               Guardar

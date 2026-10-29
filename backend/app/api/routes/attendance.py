@@ -368,8 +368,9 @@ def delete_punch(punch_id: int, db: DB, user: HR):
 
 @router.post("/attendance/presence", response_model=list[PunchOut], status_code=201)
 def mark_present(data: PresenceIn, db: DB, user: HR):
-    """«Sí se presentó»: el reloj no tiene marcas del día, pero la persona trabajó. Se crean la
-    entrada y la salida con la hora del horario, así salen las horas laboradas del turno."""
+    """«Sí se presentó» o «Repuso horario»: el reloj no tiene marcas del día, pero la persona
+    trabajó. Se crean la entrada y la salida con la hora del horario, así salen las horas
+    laboradas del turno. El motivo queda en la marca."""
     device = db.get(Device, data.device_id)
     if device is None or db.get(Employee, data.employee_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Reloj o empleado no encontrado")
@@ -400,13 +401,14 @@ def mark_present(data: PresenceIn, db: DB, user: HR):
             punch = Punch(device_id=device.id, badge=badge, punched_at=at, added_by_id=user.id)
             db.add(punch)
         punch.employee_id = data.employee_id
+        punch.manual_reason = data.reason
         punch.deleted_at = None
         punch.deleted_by_id = None
         created.append(punch)
     db.flush()
     recompute_double_taps(db, device.id, {badge}, shift.start_at, shift.end_at)
     audit.record(
-        db, user, "presente", "punch", created[0].id,
+        db, user, data.reason, "punch", created[0].id,
         {"id_reloj": badge, "empleado_id": data.employee_id, "fecha": data.date.isoformat(),
          "entrada": shift.start_at.isoformat(), "salida": shift.end_at.isoformat()},
     )
