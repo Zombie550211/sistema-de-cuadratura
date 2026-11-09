@@ -86,12 +86,14 @@ class CompensatoryStatus:
     available: list[Holiday] = field(default_factory=list)
     # Ganados que RRHH marcó «Pagado» (se pagaron en dinero): no se toman ni cuentan en el saldo.
     paid: list[Holiday] = field(default_factory=list)
+    # Ganados que RRHH dio de baja como ajuste de saldo (no se pagaron ni se tomaron).
+    adjusted: list[Holiday] = field(default_factory=list)
 
     @property
     def balance(self) -> int:
         # Todos los asuetos trabajados cuentan y están disponibles, también los anteriores al
         # 15/09/2026 (en la UI esos salen en gris). Saldo = ganados menos tomados y pagados.
-        return len(self.earned) - self.taken - len(self.paid)
+        return len(self.earned) - self.taken - len(self.paid) - len(self.adjusted)
 
 
 TAG = re.compile(r"Compensatorio (\d{2}/\d{2}/\d{4})")
@@ -168,10 +170,12 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
         for m in db.scalars(select(ManualCompensatory).where(ManualCompensatory.employee_id.in_(ids))):
             manual.setdefault(m.employee_id, []).append(m)
 
-    paid_ids: dict[int, set[int]] = {}
+    paid_ids: dict[int, dict[int, str]] = {}
     if ids:
-        for emp_id, hid in db.execute(select(CompensatoryPayment.employee_id, CompensatoryPayment.holiday_id).where(CompensatoryPayment.employee_id.in_(ids))):
-            paid_ids.setdefault(emp_id, set()).add(hid)
+        for emp_id, hid, reason in db.execute(
+            select(CompensatoryPayment.employee_id, CompensatoryPayment.holiday_id, CompensatoryPayment.reason).where(CompensatoryPayment.employee_id.in_(ids))
+        ):
+            paid_ids.setdefault(emp_id, {})[hid] = reason
 
     out = []
     for e in employees:
@@ -197,8 +201,9 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
             s.earned.append(h)
         # Disponibles = ganados sin usar, incluidos los anteriores al 15/09 (salen en gris en la UI).
         # Los pagados salen antes de repartir los días tomados: un día sin asueto nombrado no gasta uno pagado.
-        mine_paid = paid_ids.get(e.id, set())
-        s.paid = [h for h in s.earned if h.id in mine_paid]
+        mine_paid = paid_ids.get(e.id, {})
+        s.paid = [h for h in s.earned if mine_paid.get(h.id) == "pagado"]
+        s.adjusted = [h for h in s.earned if mine_paid.get(h.id) == "ajuste"]
         s.available = unused([h for h in s.earned if h.id not in mine_paid], notes.get(e.id, []))
         out.append(s)
     return out

@@ -147,6 +147,8 @@ class CompensatoryPayment(Base):
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
     holiday_id: Mapped[int] = mapped_column(Integer)
     earned_date: Mapped[date] = mapped_column(Date)
+    # pagado = se pagó en dinero («Pagado»); ajuste = RRHH ajustó el saldo (p. ej. reinicio a +1).
+    reason: Mapped[str] = mapped_column(String(16), default="pagado", server_default="pagado")
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 

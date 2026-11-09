@@ -442,6 +442,8 @@ class CompensatoryStatusOut(BaseModel):
     available: list[HolidayOut]
     # Ganados que se pagaron en dinero («Pagado»): ya no se pueden tomar.
     paid: list[HolidayOut] = []
+    # Dados de baja como ajuste de saldo (reinicio): no se tomaron ni se pagaron.
+    adjusted: list[HolidayOut] = []
     balance: int
 
 

@@ -2,6 +2,7 @@
 
     python -m app.cli crear-admin <usuario> "<Nombre completo>"
     python -m app.cli importar-empleados <archivo.tsv> [--aplicar]   (código, nombre, cargo, fecha de ingreso; o el listado con columnas HUELLA)
+    python -m app.cli reiniciar-compensatorios <saldo> [--aplicar]   (deja a todos los activos con ese saldo)
 """
 
 import getpass
@@ -58,10 +59,53 @@ def importar_empleados(path: str, apply: bool) -> None:
           f"{result['unchanged']} sin cambios, {result['skipped']} sin tocar por nombre ambiguo")
 
 
+def reiniciar_compensatorios(saldo: int, apply: bool) -> None:
+    """Deja el saldo de compensatorio de cada empleado activo en `saldo`. A quien le sobra, sus
+    pendientes más viejos se dan de baja como «ajuste» (no como pagados); a quien le falta, se le
+    suma un compensatorio manual con nota de ajuste. Sin --aplicar solo muestra lo que haría."""
+    from datetime import datetime
+
+    from app.core.config import get_settings
+    from app.models import CompensatoryPayment, Employee, EmployeeStatus, ManualCompensatory
+    from app.services.compensatory import compensatory_status
+
+    today = datetime.now(get_settings().tz).date()
+    nota = f"Ajuste de saldo (reinicio a {saldo:+d}, {today.strftime('%d/%m/%Y')})"
+    with SessionLocal() as db:
+        employees = list(db.scalars(select(Employee).where(Employee.status == EmployeeStatus.activo).order_by(Employee.first_name, Employee.last_name)))
+        bajas = altas = sin_cambio = 0
+        for s in compensatory_status(db, employees, today):
+            e = next(x for x in employees if x.id == s.employee_id)
+            if s.balance > saldo:
+                quitar = sorted(s.available, key=lambda h: h.day)[: s.balance - saldo]
+                for h in quitar:
+                    db.add(CompensatoryPayment(employee_id=e.id, holiday_id=h.id, earned_date=h.day, reason="ajuste"))
+                bajas += len(quitar)
+                aviso = "" if len(quitar) == s.balance - saldo else f"  (¡solo {len(quitar)} pendientes para quitar!)"
+                print(f"{e.full_name:45} {s.balance:+d} → {s.balance - len(quitar):+d}  baja: {', '.join(f'{h.day:%d/%m} {h.name}' for h in quitar)}{aviso}")
+            elif s.balance < saldo:
+                for _ in range(saldo - s.balance):
+                    db.add(ManualCompensatory(employee_id=e.id, earned_date=today, note=nota))
+                altas += saldo - s.balance
+                print(f"{e.full_name:45} {s.balance:+d} → {saldo:+d}  suma {saldo - s.balance} manual(es)")
+            else:
+                sin_cambio += 1
+        resumen = {"saldo": saldo, "empleados": len(employees), "bajas_ajuste": bajas, "manuales_sumados": altas, "sin_cambio": sin_cambio}
+        if not apply:
+            db.rollback()
+            print(f"\nVista previa: {resumen}. Repita con --aplicar para guardar.")
+            return
+        audit.record(db, None, "reiniciar_saldo", "compensatory", None, resumen)
+        db.commit()
+    print(f"\nAplicado: {resumen}")
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "crear-admin":
         crear_admin(sys.argv[2], sys.argv[3])
     elif len(sys.argv) in (3, 4) and sys.argv[1] == "importar-empleados":
         importar_empleados(sys.argv[2], apply=sys.argv[3:] == ["--aplicar"])
+    elif len(sys.argv) in (3, 4) and sys.argv[1] == "reiniciar-compensatorios":
+        reiniciar_compensatorios(int(sys.argv[2]), apply=sys.argv[3:] == ["--aplicar"])
     else:
         sys.exit(__doc__)

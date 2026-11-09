@@ -782,6 +782,84 @@ function PersonQuincena({
   const faltas = dates.filter((d) => check(d) === "falta").length;
   const workedOff = dates.filter((d) => check(d) === "descanso").length;
 
+  // PDF de esta ventana: la misma tabla (día, horario, marcas, llegada tarde, nocturnidad) del periodo.
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  async function downloadPdf() {
+    setPdfBusy(true);
+    setPdfError(null);
+    try {
+      const { ventanaPdf } = await import("../lib/tablePdf");
+      const emp = !!person.employeeId;
+      const dash: PdfCell = { text: "—", muted: true };
+      const rows: PdfCell[][] = dates.map((date) => {
+        const r = byDate.get(date);
+        const planned = swapFrom.get(date);
+        const shift = shiftByDate.get(planned ?? date);
+        const off = planned ? undefined : offByDate.get(date);
+        const movedTo = swapTo.get(date);
+        const flag = check(date);
+        const lt = lateByKey.get(`${person.employeeId}|${date}`);
+        const horario: PdfCell = shift
+          ? { text: `${fmtTime(shift.start_at)} – ${fmtTime(shift.end_at)}`, sub: planned ? `Cambio: turno del ${fmtLongDate(planned).toLowerCase()}` : movedTo ? `Lo trabajó el ${fmtLongDate(movedTo).toLowerCase()}` : undefined }
+          : off
+            ? { text: dayOffLabel(off), danger: isNoShow(off) }
+            : { text: "Sin horario", muted: true };
+        let marcas: PdfCell;
+        if (r) {
+          const list = r.punches.filter((p) => !p.is_double_tap);
+          const txt = [r.checkIn && `Entrada ${fmtTimeSec(r.checkIn.punched_at)}`, r.checkOut && `Salida ${fmtTimeSec(r.checkOut.punched_at)}`].filter(Boolean).join(" · ");
+          const extra = [
+            r.ignored > 0 ? `+${r.ignored} marca${r.ignored === 1 ? "" : "s"} entre entrada y salida (no cuenta${r.ignored === 1 ? "" : "n"})` : "",
+            list.some((p) => p.manual || p.original_punched_at) ? "Hora puesta o corregida por RRHH" : "",
+            flag === "descanso" ? "Marcó en su día de descanso" : "",
+          ].filter(Boolean).join(" · ");
+          marcas = { text: txt || "—", sub: extra || undefined };
+        } else if (flag === "falta") {
+          marcas = { text: off && isNoShow(off) ? "No se presentó" : "Sin marcas · faltó", danger: true };
+        } else {
+          marcas = { text: movedTo ? "Sin marcas (cambió de día)" : off ? "Sin marcas (descanso)" : "Sin marcas", muted: true };
+        }
+        const tarde: PdfCell = !r
+          ? dash
+          : off
+            ? { text: `${dayOffLabel(off)} · no cuenta`, muted: true }
+            : !lt
+              ? { text: "Sin turno · no cuenta", muted: true }
+              : !lt.late_minutes
+                ? { text: "A tiempo", muted: true }
+                : lt.counted_minutes > 0
+                  ? { text: fmtHms(lt.late_seconds), danger: true }
+                  : { text: fmtHms(lt.late_seconds), sub: `Dentro de los ${LATE_ALLOWANCE}min (${lt.quincena_minutes}/${LATE_ALLOWANCE})` };
+        const noct: PdfCell = lt?.night_seconds ? { text: fmtHms(lt.night_seconds) } : dash;
+        return emp ? [{ text: fmtLongDate(date) }, horario, marcas, tarde, noct] : [{ text: fmtLongDate(date) }, marcas];
+      });
+      const resumen = [
+        `Huella ${person.badge}`,
+        `${days.length} día${days.length === 1 ? "" : "s"} con marcas`,
+        lateTotal > 0 ? `Tarde en total: ${fmtHms(lateTotal)}` : "",
+        nightTotal > 0 ? `Nocturnidad: ${nightDays.length} día${nightDays.length === 1 ? "" : "s"} · ${fmtHms(nightTotal)}` : "",
+        faltas > 0 ? `${faltas} falta${faltas === 1 ? "" : "s"}` : "",
+        emp && !lateApplied ? "No se aplican las llegadas tarde" : "",
+        workedOff > 0 ? `Marcó ${workedOff} día${workedOff === 1 ? "" : "s"} de descanso` : "",
+      ].filter(Boolean).join(" · ");
+      const name = person.name ?? `ID ${person.badge} sin empleado`;
+      const period = isCut ? `Corte: ${fmtRange(range)}` : `Quincena: ${fmtRange(range)}`;
+      const blob = await ventanaPdf({
+        title: name,
+        period,
+        section: { title: name, subtitle: `${period} · ${resumen}`, columns: emp ? ["Día", "Horario", "Marcas", "Llegada tarde", "Nocturnidad"] : ["Día", "Marcas"], rows },
+        footer: `Se perdonan ${LATE_ALLOWANCE} min de llegada tarde por quincena. Nocturnidad: desde las ${NIGHT_START} · Solo cuentan la primera marca (entrada) y la última (salida) del día.`,
+      });
+      const slug = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      downloadBlob(blob, `marcaciones-${slug}-${isCut ? "corte-" : ""}${from}-a-${to}.pdf`);
+    } catch (err) {
+      setPdfError((err as Error).message);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   function actions(date: string, r?: DayRow): RowAction[] {
     // Un día sin marcas también se edita: así se le corrige el horario.
     const row: DayRow = r ?? {
@@ -830,6 +908,7 @@ function PersonQuincena({
         {(punches.loading || late.loading) && <div className="spinner" style={{ width: 16, height: 16 }} />}
       </div>
       {punches.error && <div className="alert" style={{ marginBottom: 16 }}>{punches.error}</div>}
+      {pdfError && <div className="alert" style={{ marginBottom: 16 }}>{pdfError}</div>}
       {!person.name && canEdit && (
         <div className="alert info" style={{ marginBottom: 16 }}>
           Esta huella no tiene empleado.{" "}
@@ -960,6 +1039,14 @@ function PersonQuincena({
             Editar todo el periodo
           </button>
         )}
+        <button
+          className="btn ghost"
+          onClick={downloadPdf}
+          disabled={pdfBusy || punches.loading || late.loading || schedule.loading}
+          title={isCut ? `Descargar en PDF esta ventana (fecha de corte ${fmtRange(range)})` : "Descargar en PDF esta ventana (quincena)"}
+        >
+          {pdfBusy ? "Generando…" : "Descargar PDF"}
+        </button>
         <button className="btn" onClick={onClose}>
           Cerrar
         </button>
@@ -1208,7 +1295,7 @@ function DownloadImage({
           rows: summaryRows,
         },
         details,
-        footer: `Se perdonan ${LATE_ALLOWANCE} min de llegada tarde por quincena. Nocturnidad: desde las ${NIGHT_START}. No se presentó: marcado así en Horarios o con turno sin marcas. * Hora puesta o corregida por RRHH.`,
+        footer: `Se perdonan ${LATE_ALLOWANCE} min de llegada tarde por quincena. Nocturnidad: desde las ${NIGHT_START} · No se presentó: marcado así en Horarios o con turno sin marcas. * Hora puesta o corregida por RRHH.`,
       });
       downloadBlob(blob, pdfName);
       onClose();
@@ -1259,7 +1346,7 @@ function DownloadImage({
         subtitle: `${fmtRange(range)} · ${selected.length} empleado${selected.length === 1 ? "" : "s"}`,
         columns,
         rows: cells,
-        footer: `Se perdonan ${LATE_ALLOWANCE} min de llegada tarde por quincena. Nocturnidad: desde las ${NIGHT_START}. No se presentó: marcado así en Horarios o con turno sin marcas.`,
+        footer: `Se perdonan ${LATE_ALLOWANCE} min de llegada tarde por quincena. Nocturnidad: desde las ${NIGHT_START} · No se presentó: marcado así en Horarios o con turno sin marcas.`,
       });
       setPreview({ blob, url: URL.createObjectURL(blob) });
     } catch (err) {

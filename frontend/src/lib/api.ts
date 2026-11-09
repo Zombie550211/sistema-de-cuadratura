@@ -337,6 +337,8 @@ export interface CompensatoryStatus {
   available: Holiday[];
   /** Ganados que se pagaron en dinero («Pagado»): ya no se toman. */
   paid: Holiday[];
+  /** Dados de baja como ajuste de saldo (reinicio): ni se tomaron ni se pagaron. */
+  adjusted: Holiday[];
   balance: number;
 }
 

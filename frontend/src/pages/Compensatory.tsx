@@ -684,7 +684,8 @@ function CompensatoryDetail({
   const earned = status?.earned ?? [];
   const pending = status?.available ?? [];
   const paid = status?.paid ?? [];
-  const paidIds = new Set(paid.map((h) => h.id));
+  const adjusted = status?.adjusted ?? [];
+  const paidIds = new Set([...paid, ...adjusted].map((h) => h.id));
   // Los pagados no se toman: no se reparten entre los días compensatorio ni se pueden elegir al editar.
   const usable = earned.filter((h) => !paidIds.has(h.id));
   const lost = status?.lost ?? [];
@@ -713,7 +714,7 @@ function CompensatoryDetail({
   return (
     <Modal
       title={`Compensatorio de ${employee.full_name}`}
-      subtitle={`${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"}${paid.length ? ` · ${paid.length} pagado${paid.length === 1 ? "" : "s"}` : ""} · saldo ${balance > 0 ? `+${balance}` : balance}`}
+      subtitle={`${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"}${paid.length ? ` · ${paid.length} pagado${paid.length === 1 ? "" : "s"}` : ""}${adjusted.length ? ` · ${adjusted.length} ajustado${adjusted.length === 1 ? "" : "s"}` : ""} · saldo ${balance > 0 ? `+${balance}` : balance}`}
       onClose={onClose}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -760,6 +761,31 @@ function CompensatoryDetail({
                     <small>Trabajó el asueto · se pagó, no se toma</small>
                   </span>
                   <span className="lv-status ok">Pagado</span>
+                  {canEdit && (
+                    <button className="btn ghost sm" disabled={payBusy !== null} onClick={() => setPaid(h, true)} title="Vuelve a dejarlo pendiente">
+                      {payBusy === h.id ? "Guardando…" : "Deshacer"}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {adjusted.length > 0 && (
+          <section className="modal-sec">
+            <span className="modal-label">
+              Ajustes de saldo<small>dados de baja por RRHH al reiniciar el saldo</small>
+            </span>
+            <ul className="cp-list">
+              {adjusted.map((h) => (
+                <li key={h.id}>
+                  <span className="cp-list-date">{fmtDate(h.day)}</span>
+                  <span className="cp-list-main">
+                    <b>{h.name}</b>
+                    <small>Ajuste de saldo · no se tomó ni se pagó</small>
+                  </span>
+                  <span className="lv-status">Ajustado</span>
                   {canEdit && (
                     <button className="btn ghost sm" disabled={payBusy !== null} onClick={() => setPaid(h, true)} title="Vuelve a dejarlo pendiente">
                       {payBusy === h.id ? "Guardando…" : "Deshacer"}

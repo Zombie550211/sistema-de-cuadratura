@@ -161,7 +161,23 @@ export async function marcacionesPdf(opts: {
     }
   }
 
-  // Acomoda las imágenes de arriba abajo; si una no cabe en lo que queda, pasa a la página siguiente.
+  return paginar(images, opts.title, opts.period, generated);
+}
+
+/** PDF de una sola ventana (p. ej. el detalle de un empleado): una tabla, partida en páginas si
+ *  es larga, con el título y el periodo arriba. */
+export async function ventanaPdf(opts: { title: string; period: string; section: PdfSection; footer?: string; rowsPerPage?: number }): Promise<Blob> {
+  const generated = new Intl.DateTimeFormat("es-SV", { timeZone: "America/El_Salvador", dateStyle: "long", timeStyle: "short" }).format(new Date());
+  const parts = chunks(opts.section, opts.rowsPerPage ?? 14);
+  const images: { img: Placed; newPage: boolean }[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    images.push({ img: await draw(parts[i], i + 1, parts.length, i === parts.length - 1 ? opts.footer : undefined), newPage: i > 0 });
+  }
+  return paginar(images, opts.title, opts.period, generated);
+}
+
+/** Acomoda las imágenes de arriba abajo; si una no cabe en lo que queda, pasa a la página siguiente. */
+function paginar(images: { img: Placed; newPage: boolean }[], title: string, period: string, generated: string): Blob {
   const maxW = W - M * 2;
   const maxH = H - M * 2 - FOOT;
   const pages: { images: { img: Placed; x: number; y: number; w: number; h: number }[] }[] = [{ images: [] }];
@@ -185,7 +201,7 @@ export async function marcacionesPdf(opts: {
   return writePdf(
     pages.map((p, i) => ({
       ...p,
-      footLeft: `${opts.title} · ${opts.period} · Generado el ${generated}`,
+      footLeft: `${title} · ${period} · Generado el ${generated}`,
       footRight: `Página ${i + 1} de ${pages.length}`,
     })),
   );
