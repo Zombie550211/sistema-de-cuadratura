@@ -59,10 +59,11 @@ def importar_empleados(path: str, apply: bool) -> None:
           f"{result['unchanged']} sin cambios, {result['skipped']} sin tocar por nombre ambiguo")
 
 
-def reiniciar_compensatorios(saldo: int, apply: bool) -> None:
+def reiniciar_compensatorios(saldo: int, apply: bool, conservar=None) -> None:
     """Deja el saldo de compensatorio de cada empleado activo en `saldo`. A quien le sobra, sus
     pendientes más viejos se dan de baja como «ajuste» (no como pagados); a quien le falta, se le
-    suma un compensatorio manual con nota de ajuste. Sin --aplicar solo muestra lo que haría."""
+    suma un compensatorio manual con nota de ajuste. Sin --aplicar solo muestra lo que haría.
+    `conservar` (fecha): ese asueto es el último en darse de baja, así queda como el saldo."""
     from datetime import datetime
 
     from app.core.config import get_settings
@@ -76,20 +77,27 @@ def reiniciar_compensatorios(saldo: int, apply: bool) -> None:
         bajas = altas = sin_cambio = 0
         for s in compensatory_status(db, employees, today):
             e = next(x for x in employees if x.id == s.employee_id)
-            if s.balance > saldo:
-                quitar = sorted(s.available, key=lambda h: h.day)[: s.balance - saldo]
-                for h in quitar:
-                    db.add(CompensatoryPayment(employee_id=e.id, holiday_id=h.id, earned_date=h.day, reason="ajuste"))
-                bajas += len(quitar)
-                aviso = "" if len(quitar) == s.balance - saldo else f"  (¡solo {len(quitar)} pendientes para quitar!)"
-                print(f"{e.full_name:45} {s.balance:+d} → {s.balance - len(quitar):+d}  baja: {', '.join(f'{h.day:%d/%m} {h.name}' for h in quitar)}{aviso}")
-            elif s.balance < saldo:
-                for _ in range(saldo - s.balance):
-                    db.add(ManualCompensatory(employee_id=e.id, earned_date=today, note=nota))
-                altas += saldo - s.balance
-                print(f"{e.full_name:45} {s.balance:+d} → {saldo:+d}  suma {saldo - s.balance} manual(es)")
+            if conservar:
+                # Solo cuenta el asueto `conservar`: todo lo demás pendiente se da de baja.
+                quitar = [h for h in s.available if h.day != conservar]
+                if s.balance - len(quitar) > saldo:  # aun así sobra: quitar también ese
+                    quitar = sorted(s.available, key=lambda h: (h.day == conservar, h.day))[: s.balance - saldo]
             else:
+                quitar = sorted(s.available, key=lambda h: h.day)[: max(0, s.balance - saldo)]
+            for h in quitar:
+                db.add(CompensatoryPayment(employee_id=e.id, holiday_id=h.id, earned_date=h.day, reason="ajuste"))
+            bajas += len(quitar)
+            queda = s.balance - len(quitar)
+            suma = max(0, saldo - queda)
+            for _ in range(suma):
+                db.add(ManualCompensatory(employee_id=e.id, earned_date=today, note=nota))
+            altas += suma
+            if not quitar and not suma:
                 sin_cambio += 1
+                continue
+            conserva = ", ".join(f"{h.day:%d/%m}" for h in s.available if h not in quitar) or "-"
+            baja = ", ".join(f"{h.day:%d/%m} {h.name}" for h in quitar) or "-"
+            print(f"{e.full_name:45} {s.balance:+d} → {queda + suma:+d}  queda: {conserva}  manual: +{suma}  baja: {baja}")
         resumen = {"saldo": saldo, "empleados": len(employees), "bajas_ajuste": bajas, "manuales_sumados": altas, "sin_cambio": sin_cambio}
         if not apply:
             db.rollback()
@@ -105,7 +113,11 @@ if __name__ == "__main__":
         crear_admin(sys.argv[2], sys.argv[3])
     elif len(sys.argv) in (3, 4) and sys.argv[1] == "importar-empleados":
         importar_empleados(sys.argv[2], apply=sys.argv[3:] == ["--aplicar"])
-    elif len(sys.argv) in (3, 4) and sys.argv[1] == "reiniciar-compensatorios":
-        reiniciar_compensatorios(int(sys.argv[2]), apply=sys.argv[3:] == ["--aplicar"])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "reiniciar-compensatorios":
+        from datetime import date
+
+        extra = sys.argv[3:]
+        fecha = next((date.fromisoformat(x.split("=", 1)[1]) for x in extra if x.startswith("--conservar=")), None)
+        reiniciar_compensatorios(int(sys.argv[2]), apply="--aplicar" in extra, conservar=fecha)
     else:
         sys.exit(__doc__)
