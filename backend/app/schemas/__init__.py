@@ -325,6 +325,13 @@ class ManualCompensatoryIn(BaseModel):
     note: str | None = Field(default=None, max_length=300)
 
 
+class CompensatoryPaymentIn(BaseModel):
+    """«Pagado»: el asueto trabajado (holiday_id; negativo si es un «Otro») se pagó en dinero."""
+
+    employee_id: int
+    holiday_id: int
+
+
 class ManualCompensatoryOut(ORM):
     id: int
     employee_id: int
@@ -433,6 +440,8 @@ class CompensatoryStatusOut(BaseModel):
     lost: list[HolidayOut]
     taken: int
     available: list[HolidayOut]
+    # Ganados que se pagaron en dinero («Pagado»): ya no se pueden tomar.
+    paid: list[HolidayOut] = []
     balance: int
 
 

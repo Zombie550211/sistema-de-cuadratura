@@ -51,6 +51,8 @@ export async function tableImage(opts: {
   columns: ImageColumn[];
   rows: ImageCell[][];
   footer?: string;
+  /** image/png (por defecto) o image/jpeg, que es lo que mete el PDF. */
+  mime?: "image/png" | "image/jpeg";
 }): Promise<Blob> {
   await document.fonts.ready;
   const measure = document.createElement("canvas").getContext("2d")!;
@@ -186,7 +188,7 @@ export async function tableImage(opts: {
     ctx.fillText(opts.footer, PAD, height - PAD - 8);
   }
 
-  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("No se pudo crear la imagen"))), "image/png"));
+  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("No se pudo crear la imagen"))), opts.mime ?? "image/png", 0.92));
 }
 
 export function downloadBlob(blob: Blob, filename: string) {

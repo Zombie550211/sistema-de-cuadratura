@@ -18,7 +18,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models import Employee, Holiday, HolidayWorker, ManualCompensatory, Punch, ShiftDayOff
+from app.models import CompensatoryPayment, Employee, Holiday, HolidayWorker, ManualCompensatory, Punch, ShiftDayOff
 
 # Las marcaciones del sistema empiezan con el asueto del 15 de septiembre de 2026. Los asuetos
 # anteriores del mismo año cuentan solo para quien RRHH anote que los trabajó; los de años
@@ -84,12 +84,14 @@ class CompensatoryStatus:
     taken: int = 0
     # Ganados que aún no se han usado en un día compensatorio.
     available: list[Holiday] = field(default_factory=list)
+    # Ganados que RRHH marcó «Pagado» (se pagaron en dinero): no se toman ni cuentan en el saldo.
+    paid: list[Holiday] = field(default_factory=list)
 
     @property
     def balance(self) -> int:
         # Todos los asuetos trabajados cuentan y están disponibles, también los anteriores al
-        # 15/09/2026 (en la UI esos salen en gris). Saldo = ganados menos tomados.
-        return len(self.earned) - self.taken
+        # 15/09/2026 (en la UI esos salen en gris). Saldo = ganados menos tomados y pagados.
+        return len(self.earned) - self.taken - len(self.paid)
 
 
 TAG = re.compile(r"Compensatorio (\d{2}/\d{2}/\d{4})")
@@ -166,6 +168,11 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
         for m in db.scalars(select(ManualCompensatory).where(ManualCompensatory.employee_id.in_(ids))):
             manual.setdefault(m.employee_id, []).append(m)
 
+    paid_ids: dict[int, set[int]] = {}
+    if ids:
+        for emp_id, hid in db.execute(select(CompensatoryPayment.employee_id, CompensatoryPayment.holiday_id).where(CompensatoryPayment.employee_id.in_(ids))):
+            paid_ids.setdefault(emp_id, set()).add(hid)
+
     out = []
     for e in employees:
         s = CompensatoryStatus(e.id, taken=sum(used(n) for n in notes.get(e.id, [])))
@@ -189,6 +196,9 @@ def compensatory_status(db: Session, employees: list[Employee], today: date) -> 
             h.id = -m.id
             s.earned.append(h)
         # Disponibles = ganados sin usar, incluidos los anteriores al 15/09 (salen en gris en la UI).
-        s.available = unused(s.earned, notes.get(e.id, []))
+        # Los pagados salen antes de repartir los días tomados: un día sin asueto nombrado no gasta uno pagado.
+        mine_paid = paid_ids.get(e.id, set())
+        s.paid = [h for h in s.earned if h.id in mine_paid]
+        s.available = unused([h for h in s.earned if h.id not in mine_paid], notes.get(e.id, []))
         out.append(s)
     return out

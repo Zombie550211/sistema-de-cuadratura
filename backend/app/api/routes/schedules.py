@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DB, HR, Staff
 from app.core.config import get_settings
-from app.models import Employee, EmployeeStatus, Holiday, HolidayWorker, ManualCompensatory, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
+from app.models import CompensatoryPayment, Employee, EmployeeStatus, Holiday, HolidayWorker, ManualCompensatory, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
 from app.schemas import (
     BulkAssignIn,
     BulkAssignOut,
@@ -20,6 +20,7 @@ from app.schemas import (
     LeaveBulkOut,
     ShiftDayOffIn,
     ShiftDayOffOut,
+    CompensatoryPaymentIn,
     ManualCompensatoryIn,
     ManualCompensatoryOut,
     ShiftDayOffUpdateIn,
@@ -398,9 +399,38 @@ def list_compensatory(db: DB, _: Staff, area: Annotated[str | None, Query(max_le
     ensure_years(db, data_years(db, today))
     db.commit()
     return [
-        CompensatoryStatusOut(employee_id=s.employee_id, earned=s.earned, lost=s.lost, taken=s.taken, available=s.available, balance=s.balance)
+        CompensatoryStatusOut(employee_id=s.employee_id, earned=s.earned, lost=s.lost, taken=s.taken, available=s.available, paid=s.paid, balance=s.balance)
         for s in compensatory_status(db, _active_employees(db, area), today)
     ]
+
+
+@router.post("/compensatory-payments", status_code=status.HTTP_204_NO_CONTENT)
+def mark_compensatory_paid(data: CompensatoryPaymentIn, db: DB, user: HR):
+    """«Pagado»: el asueto trabajado pendiente se pagó en dinero; deja de estar disponible."""
+    employee = db.get(Employee, data.employee_id)
+    if employee is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Empleado no encontrado")
+    today = datetime.now(get_settings().tz).date()
+    [s] = compensatory_status(db, [employee], today)
+    holiday = next((h for h in s.available if h.id == data.holiday_id), None)
+    if holiday is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Ese compensatorio ya no está pendiente")
+    db.add(CompensatoryPayment(employee_id=employee.id, holiday_id=holiday.id, earned_date=holiday.day, created_by_id=user.id))
+    audit.record(db, user, "pagado", "compensatory_payment", employee.id, {"asueto": holiday.day.isoformat(), "nombre": holiday.name})
+    db.commit()
+
+
+@router.delete("/compensatory-payments", status_code=status.HTTP_204_NO_CONTENT)
+def unmark_compensatory_paid(db: DB, user: HR, employee_id: int, holiday_id: int):
+    """Deshace «Pagado»: el asueto vuelve a quedar pendiente."""
+    payment = db.scalar(
+        select(CompensatoryPayment).where(CompensatoryPayment.employee_id == employee_id, CompensatoryPayment.holiday_id == holiday_id)
+    )
+    if payment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No estaba marcado como pagado")
+    audit.record(db, user, "deshacer_pagado", "compensatory_payment", employee_id, {"asueto": payment.earned_date.isoformat()})
+    db.delete(payment)
+    db.commit()
 
 
 @router.post("/manual-compensatories", response_model=ManualCompensatoryOut, status_code=status.HTTP_201_CREATED)

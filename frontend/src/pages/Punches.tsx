@@ -26,6 +26,7 @@ import { useAuth } from "../lib/auth";
 import { dayOffColor, dayOffLabel, isNoShow } from "../lib/shiftColors";
 import { addDays, fmtDate, fmtLongDate, fmtMinutes, fmtRange, fmtTime, fmtHms, fmtTimeSec, localDate, quincena, today } from "../lib/format";
 import { downloadBlob, tableImage, type ImageCell, type ImageColumn } from "../lib/tableImage";
+import type { PdfCell, PdfSection } from "../lib/tablePdf";
 import { useAsync } from "../lib/useAsync";
 import { ImportPanel } from "./Import";
 
@@ -147,7 +148,7 @@ export function Punches() {
   const [showDoubles, setShowDoubles] = useState(true);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<"png" | "pdf" | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   // Fecha de corte: si está puesta, en lugar de la quincena se ve de la fecha de inicio hasta el
   // día de corte (las marcas y las llegadas tarde se calculan solo hasta ese día). Se guarda en el
@@ -352,8 +353,16 @@ export function Punches() {
           <label className="check">
             <input type="checkbox" checked={showDoubles} onChange={(e) => setShowDoubles(e.target.checked)} /> Dobles marcas
           </label>
-          <button className="btn ghost sm" onClick={() => setExporting(true)} disabled={!people.length} title="Descargar la tabla del local como imagen">
+          <button className="btn ghost sm" onClick={() => setExporting("png")} disabled={!people.length} title="Descargar la tabla del local como imagen">
             Descargar imagen
+          </button>
+          <button
+            className="btn ghost sm"
+            onClick={() => setExporting("pdf")}
+            disabled={!people.length}
+            title={cut ? `Exportar a PDF las marcaciones de la fecha de corte (${fmtRange(cut)})` : "Exportar a PDF las marcaciones de la quincena"}
+          >
+            Exportar PDF
           </button>
         </div>
       </section>
@@ -526,7 +535,15 @@ export function Punches() {
         </Modal>
       )}
       {exporting && device && (
-        <DownloadImage device={device} range={[from, to]} people={people} lateness={late.data ?? []} onClose={() => setExporting(false)} />
+        <DownloadImage
+          format={exporting}
+          device={device}
+          range={[from, to]}
+          isCut={!!cut}
+          people={people}
+          lateness={late.data ?? []}
+          onClose={() => setExporting(null)}
+        />
       )}
       {editing && !dialog && (
         <EditPerson
@@ -1026,6 +1043,45 @@ function LatenessWaiverConfirm({
   );
 }
 
+/** Hora para el PDF, con * si la puso o corrigió RRHH. */
+const pdfTime = (p: Punch | null) => (p ? `${fmtTime(p.punched_at)}${p.manual || p.original_punched_at ? " *" : ""}` : "—");
+
+/** Tabla del PDF con cada día del periodo de una persona: entrada, salida y llegada tarde, o el
+ *  motivo si no marcó (descanso, incapacidad, no se presentó…). Los días sin turno ni marcas no van. */
+function detailSection(p: PersonRow, id: number, [from, to]: [string, string], lateByKey: Map<string, Lateness>, daysOff: ShiftDayOff[]): PdfSection {
+  const byDate = new Map(p.days.map((d) => [d.date, d]));
+  const offByDate = new Map(daysOff.filter((d) => d.employee_id === id).map((d) => [d.work_date, d]));
+  const past = today();
+  const rows: PdfCell[][] = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const day = byDate.get(d);
+    const late = lateByKey.get(`${id}|${d}`);
+    const off = offByDate.get(d);
+    const fecha: PdfCell = { text: `${dayTag(d)} · ${fmtDate(d)}` };
+    const turno: PdfCell = late ? { text: fmtTime(late.shift_start) } : { text: "Sin turno", muted: true };
+    if (day) {
+      const tarde: PdfCell = off
+        ? { text: `${dayOffLabel(off)} · no cuenta`, muted: true }
+        : !late
+          ? { text: "—", muted: true }
+          : late.late_seconds
+            ? { text: fmtHms(late.late_seconds), danger: late.counted_minutes > 0 }
+            : { text: "A tiempo", muted: true };
+      rows.push([fecha, turno, { text: pdfTime(day.checkIn) }, { text: pdfTime(day.checkOut) }, tarde]);
+    } else if (off) {
+      rows.push([fecha, turno, { text: dayOffLabel(off), danger: isNoShow(off), muted: !isNoShow(off) }, { text: "—", muted: true }, { text: "—", muted: true }]);
+    } else if (late && d < past) {
+      rows.push([fecha, turno, { text: "No se presentó", danger: true }, { text: "—", muted: true }, { text: "—", muted: true }]);
+    }
+  }
+  return {
+    title: p.name ?? `Huella ${p.badge}`,
+    subtitle: `Huella ${p.badge} · ${p.days.length} día${p.days.length === 1 ? "" : "s"} con marca`,
+    columns: ["Fecha", "Turno", "Entrada", "Salida", "Llegada tarde"],
+    rows: rows.length ? rows : [[{ text: "Sin marcas ni turnos en el periodo", muted: true }, { text: "" }, { text: "" }, { text: "" }, { text: "" }]],
+  };
+}
+
 interface ImageRow {
   id: number;
   name: string;
@@ -1040,19 +1096,29 @@ interface ImageRow {
  *  revisa la vista previa y la descarga en PNG. Van los empleados que marcaron en este local en el
  *  periodo y los activos que tienen huella de este local. */
 function DownloadImage({
+  format,
   device,
   range,
+  isCut,
   people,
   lateness,
   onClose,
 }: {
+  /** png = imagen con vista previa; pdf = documento del periodo (la fecha de corte si está aplicada). */
+  format: "png" | "pdf";
   device: Device;
   range: [string, string];
+  isCut: boolean;
   people: PersonRow[];
   lateness: Lateness[];
   onClose: () => void;
 }) {
   const [from, to] = range;
+  const isPdf = format === "pdf";
+  const periodDays = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1;
+  const periodLabel = `${isCut ? "Fecha de corte" : "Quincena"}: ${fmtRange(range)}`;
+  // En el PDF puede ir, además del resumen, la entrada y salida de cada empleado día por día.
+  const [withDetail, setWithDetail] = useState(true);
   const local = localName(device);
   const lateByKey = useMemo(() => new Map(lateness.map((l) => [`${l.employee_id}|${l.date}`, l])), [lateness]);
   const extra = useAsync(async () => {
@@ -1095,6 +1161,7 @@ function DownloadImage({
   const [preview, setPreview] = useState<{ blob: Blob; url: string } | null>(null);
   const selected = rows.filter((r) => !hidden.has(r.id));
   const fileName = `marcaciones-${local}-${from}-a-${to}.png`;
+  const pdfName = `marcaciones-${local}-${isCut ? "corte-" : ""}${from}-a-${to}.pdf`;
 
   useEffect(() => () => {
     if (preview) URL.revokeObjectURL(preview.url);
@@ -1105,6 +1172,51 @@ function DownloadImage({
     if (next.has(id)) next.delete(id);
     else next.add(id);
     setHidden(next);
+  }
+
+  async function generatePdf() {
+    setBusy(true);
+    setError(null);
+    try {
+      const { marcacionesPdf } = await import("../lib/tablePdf");
+      const daysOff = extra.data?.daysOff ?? [];
+      const dash: PdfCell = { text: "—", muted: true };
+      const dayList = (list: string[], danger?: boolean): PdfCell =>
+        list.length ? { text: `${list.length} día${list.length === 1 ? "" : "s"}`, sub: list.map(dayTag).join(", "), danger } : dash;
+      const summaryRows: PdfCell[][] = selected.map(({ person: p, id }) => {
+        const ls = lateSummary(p, lateByKey);
+        const ns = nightSummary(p, lateByKey);
+        const dk = dayKinds(id, daysOff, lateness);
+        return [
+          { text: p.name ?? "" },
+          { text: `${p.days.length}/${periodDays}` },
+          ls.days ? { text: `${ls.days} día${ls.days === 1 ? "" : "s"}`, sub: `Total: ${fmtHms(ls.seconds)}`, danger: ls.counted > 0 } : dash,
+          ns.days ? { text: `${ns.days} día${ns.days === 1 ? "" : "s"}`, sub: fmtHms(ns.seconds) } : dash,
+          dayList(dk.incapacidad),
+          dayList(dk.noShow, true),
+          dayList(dk.compensatorio),
+        ];
+      });
+      const details: PdfSection[] = withDetail ? selected.map(({ person: p, id }) => detailSection(p, id, range, lateByKey, daysOff)) : [];
+      const blob = await marcacionesPdf({
+        title: `Marcaciones · Local ${local}`,
+        period: periodLabel,
+        summary: {
+          title: "Resumen del periodo",
+          subtitle: `${selected.length} empleado${selected.length === 1 ? "" : "s"}`,
+          columns: ["Empleado", "Días con marca", "Llegadas tarde", "Nocturnidad", "Incapacidad", "No se presentó", "Compensatorio"],
+          rows: summaryRows,
+        },
+        details,
+        footer: `Se perdonan ${LATE_ALLOWANCE} min de llegada tarde por quincena. Nocturnidad: desde las ${NIGHT_START}. No se presentó: marcado así en Horarios o con turno sin marcas. * Hora puesta o corregida por RRHH.`,
+      });
+      downloadBlob(blob, pdfName);
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function generate() {
@@ -1185,9 +1297,9 @@ function DownloadImage({
   }
 
   return (
-    <Modal title={`Descargar imagen · Local ${local}`} onClose={onClose}>
+    <Modal title={`${isPdf ? "Exportar PDF" : "Descargar imagen"} · Local ${local}`} onClose={onClose}>
       <p className="caption" style={{ marginTop: -12, marginBottom: 16 }}>
-        {fmtRange(range)} · Quite a los empleados que no quiere mostrar en la imagen.
+        {isPdf ? periodLabel : fmtRange(range)} · Quite a los empleados que no quiere {isPdf ? "incluir en el documento" : "mostrar en la imagen"}.
       </p>
       {extra.error && <div className="alert">{extra.error}</div>}
       {extra.loading && !extra.data ? (
@@ -1228,8 +1340,13 @@ function DownloadImage({
         <button className="btn ghost" onClick={onClose}>
           Cancelar
         </button>
-        <button className="btn" disabled={busy || !selected.length} onClick={generate}>
-          {busy ? "Generando…" : "Vista previa"}
+        {isPdf && (
+          <label className="check" style={{ marginRight: "auto" }} title="Además del resumen, una tabla por empleado con su entrada y salida de cada día">
+            <input type="checkbox" checked={withDetail} onChange={(e) => setWithDetail(e.target.checked)} /> Incluir detalle día por día
+          </label>
+        )}
+        <button className="btn" disabled={busy || !selected.length || !extra.data} onClick={isPdf ? generatePdf : generate}>
+          {busy ? "Generando…" : isPdf ? "Descargar PDF" : "Vista previa"}
         </button>
       </div>
     </Modal>

@@ -135,6 +135,22 @@ class ManualCompensatory(Base):
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
 
 
+class CompensatoryPayment(Base):
+    """Compensatorio pagado en dinero: RRHH marca «Pagado» un asueto trabajado pendiente y deja de
+    estar disponible para tomarse como día libre. holiday_id es el id del asueto o, si es un
+    compensatorio manual («Otro»), su id en negativo (igual que en el cálculo del saldo)."""
+
+    __tablename__ = "compensatory_payments"
+    __table_args__ = (UniqueConstraint("employee_id", "holiday_id", name="uq_compensatory_payments_employee_holiday"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    holiday_id: Mapped[int] = mapped_column(Integer)
+    earned_date: Mapped[date] = mapped_column(Date)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class PayrollMark(Base):
     """Empleado ya agregado a planilla («cuadrado») en un periodo. La fila existe = marcado como
     «ya agregado a planilla» para el periodo que empieza en period_start (la quincena o el corte

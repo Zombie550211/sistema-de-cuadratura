@@ -335,6 +335,8 @@ export interface CompensatoryStatus {
   taken: number;
   /** Ganados que aún no se han usado en un día compensatorio. */
   available: Holiday[];
+  /** Ganados que se pagaron en dinero («Pagado»): ya no se toman. */
+  paid: Holiday[];
   balance: number;
 }
 

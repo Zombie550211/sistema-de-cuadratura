@@ -679,10 +679,31 @@ function CompensatoryDetail({
     [employee.id],
   );
   const [editing, setEditing] = useState<ShiftDayOff | null>(null);
+  const [payBusy, setPayBusy] = useState<number | null>(null);
+  const [payError, setPayError] = useState<string | null>(null);
   const earned = status?.earned ?? [];
   const pending = status?.available ?? [];
+  const paid = status?.paid ?? [];
+  const paidIds = new Set(paid.map((h) => h.id));
+  // Los pagados no se toman: no se reparten entre los días compensatorio ni se pueden elegir al editar.
+  const usable = earned.filter((h) => !paidIds.has(h.id));
   const lost = status?.lost ?? [];
-  const rows = takenWithHoliday(earned, taken.data ?? []);
+  const rows = takenWithHoliday(usable, taken.data ?? []);
+
+  /** «Pagado»: el asueto se pagó en dinero (o, con undo, vuelve a quedar pendiente). */
+  async function setPaid(h: Holiday, undo = false) {
+    setPayBusy(h.id);
+    setPayError(null);
+    try {
+      if (undo) await api.delete(`/schedules/compensatory-payments?employee_id=${employee.id}&holiday_id=${h.id}`);
+      else await api.post("/schedules/compensatory-payments", { employee_id: employee.id, holiday_id: h.id });
+      onChanged();
+    } catch (err) {
+      setPayError((err as Error).message);
+    } finally {
+      setPayBusy(null);
+    }
+  }
   // Para no repetir el botón de editar cuando un día compensa dos asuetos (dos filas, un día).
   const firstRowOfDay = new Map<number, number>();
   rows.forEach(({ day }, i) => firstRowOfDay.has(day.id) || firstRowOfDay.set(day.id, i));
@@ -692,7 +713,7 @@ function CompensatoryDetail({
   return (
     <Modal
       title={`Compensatorio de ${employee.full_name}`}
-      subtitle={`${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"} · saldo ${balance > 0 ? `+${balance}` : balance}`}
+      subtitle={`${earned.length} ganado${earned.length === 1 ? "" : "s"} · ${status?.taken ?? 0} tomado${status?.taken === 1 ? "" : "s"}${paid.length ? ` · ${paid.length} pagado${paid.length === 1 ? "" : "s"}` : ""} · saldo ${balance > 0 ? `+${balance}` : balance}`}
       onClose={onClose}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -710,6 +731,11 @@ function CompensatoryDetail({
                     <small>Trabajó el asueto · compensatorio por tomar</small>
                   </span>
                   <span className="lv-status warn">Pendiente</span>
+                  {canEdit && (
+                    <button className="btn ghost sm" disabled={payBusy !== null} onClick={() => setPaid(h)} title="Se pagó en dinero: deja de estar pendiente y baja el saldo">
+                      {payBusy === h.id ? "Guardando…" : "Pagado"}
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -717,6 +743,33 @@ function CompensatoryDetail({
             <span className="caption">No tiene compensatorios pendientes.</span>
           )}
         </section>
+
+        {payError && <div className="alert">{payError}</div>}
+
+        {paid.length > 0 && (
+          <section className="modal-sec">
+            <span className="modal-label">
+              Pagados<small>asuetos trabajados que se pagaron en dinero</small>
+            </span>
+            <ul className="cp-list">
+              {paid.map((h) => (
+                <li key={h.id}>
+                  <span className="cp-list-date">{fmtDate(h.day)}</span>
+                  <span className="cp-list-main">
+                    <b>{h.name}</b>
+                    <small>Trabajó el asueto · se pagó, no se toma</small>
+                  </span>
+                  <span className="lv-status ok">Pagado</span>
+                  {canEdit && (
+                    <button className="btn ghost sm" disabled={payBusy !== null} onClick={() => setPaid(h, true)} title="Vuelve a dejarlo pendiente">
+                      {payBusy === h.id ? "Guardando…" : "Deshacer"}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <section className="modal-sec">
           <span className="modal-label">
@@ -774,7 +827,7 @@ function CompensatoryDetail({
       {editing && (
         <EditCompensatoryModal
           day={editing}
-          earned={earned}
+          earned={usable}
           onClose={() => setEditing(null)}
           onDone={() => {
             setEditing(null);

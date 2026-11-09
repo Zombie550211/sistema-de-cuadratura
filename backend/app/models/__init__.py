@@ -6,7 +6,7 @@ from app.models.integration import ApiClient, IntegrationSync
 from app.models.google_ads import GoogleAdsReceipt
 from app.models.employee import AREAS, Department, Employee, EmployeeStatus, PayFrequency, area_for, user_code_base
 from app.models.setting import AppSetting
-from app.models.schedule import CrmOutbox, Holiday, HolidayWorker, LatenessWaiver, ManualCompensatory, PayrollMark, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
+from app.models.schedule import CompensatoryPayment, CrmOutbox, Holiday, HolidayWorker, LatenessWaiver, ManualCompensatory, PayrollMark, ShiftAssignment, ShiftDayOff, ShiftTemplate, VacationPeriod
 from app.models.user import Role, User
 
 __all__ = [
@@ -18,6 +18,7 @@ __all__ = [
     "IntegrationSync",
     "AuditLog",
     "Base",
+    "CompensatoryPayment",
     "CrmOutbox",
     "Department",
     "Device",
